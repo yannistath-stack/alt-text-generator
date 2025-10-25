@@ -1,0 +1,485 @@
+import React, { useState } from 'react';
+import JSZip from 'jszip';
+import { jsPDF } from 'jspdf';
+
+export default function AltTextGenerator() {
+  const [vehicleInfo, setVehicleInfo] = useState({
+    year: '',
+    make: '',
+    model: '',
+    trim: '',
+    color: ''
+  });
+  
+  const [images, setImages] = useState([]);
+  const [showResults, setShowResults] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState(null);
+  const [processing, setProcessing] = useState(false);
+
+  const detectAngle = (filename) => {
+    const lower = filename.toLowerCase();
+    if (lower.includes('front')) return 'front three-quarter view';
+    if (lower.includes('side')) return 'side profile view';
+    if (lower.includes('rear') || lower.includes('back')) return 'rear three-quarter view';
+    if (lower.includes('interior') || lower.includes('inside')) return 'interior dashboard view';
+    if (lower.includes('detail')) return 'detail shot';
+    if (lower.includes('wheel')) return 'wheel detail';
+    if (lower.includes('engine')) return 'engine bay view';
+    return 'three-quarter view';
+  };
+
+  const areImagesSimilar = (name1, name2) => {
+    const clean1 = name1.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
+    const clean2 = name2.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
+    return clean1 === clean2;
+  };
+
+  const handleZipUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setProcessing(true);
+    const zip = new JSZip();
+    
+    try {
+      const contents = await zip.loadAsync(file);
+      const imageFiles = [];
+      const processedNames = new Set();
+
+      for (const [filename, zipEntry] of Object.entries(contents.files)) {
+        if (zipEntry.dir) continue;
+        
+        const ext = filename.split('.').pop().toLowerCase();
+        if (!['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(ext)) continue;
+
+        const isDuplicate = Array.from(processedNames).some(name => 
+          areImagesSimilar(name, filename)
+        );
+
+        if (!isDuplicate) {
+          const blob = await zipEntry.async('blob');
+          const url = URL.createObjectURL(blob);
+          const angle = detectAngle(filename);
+          
+          imageFiles.push({
+            id: Date.now() + Math.random(),
+            filename,
+            url,
+            angle
+          });
+          
+          processedNames.add(filename);
+        }
+      }
+
+      setImages(imageFiles);
+      setShowResults(true);
+      setProcessing(false);
+    } catch (error) {
+      alert('Error processing ZIP file. Please try again.');
+      setProcessing(false);
+    }
+  };
+
+  const generateAltText = (angle) => {
+    const { year, make, model, trim, color } = vehicleInfo;
+    let altText = `${year} ${make} ${model}`;
+    if (trim) altText += ` ${trim}`;
+    if (color) altText += ` in ${color}`;
+    altText += `, ${angle}`;
+    return altText;
+  };
+
+  const copyToClipboard = (text, index) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
+  const exportPDF = () => {
+    const doc = new jsPDF();
+    let yPosition = 20;
+
+    doc.setFontSize(18);
+    doc.text('Alt Text Report', 20, yPosition);
+    yPosition += 10;
+
+    doc.setFontSize(12);
+    const vehicleText = `${vehicleInfo.year} ${vehicleInfo.make} ${vehicleInfo.model} ${vehicleInfo.trim || ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`;
+    doc.text(vehicleText, 20, yPosition);
+    yPosition += 15;
+
+    images.forEach((img, index) => {
+      if (yPosition > 250) {
+        doc.addPage();
+        yPosition = 20;
+      }
+
+      const altText = generateAltText(img.angle);
+      
+      doc.setFontSize(10);
+      doc.text(`Image ${index + 1}:`, 20, yPosition);
+      yPosition += 7;
+      
+      const splitText = doc.splitTextToSize(altText, 170);
+      doc.text(splitText, 20, yPosition);
+      yPosition += (splitText.length * 7) + 10;
+    });
+
+    doc.save('alt-text-report.pdf');
+  };
+
+  const resetTool = () => {
+    setShowResults(false);
+    setImages([]);
+    setVehicleInfo({
+      year: '',
+      make: '',
+      model: '',
+      trim: '',
+      color: ''
+    });
+  };
+
+  if (showResults) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.card}>
+          <div style={styles.header}>
+            <div>
+              <h1 style={styles.title}>Generated Alt Text</h1>
+              <p style={styles.subtitle}>
+                {vehicleInfo.year} {vehicleInfo.make} {vehicleInfo.model} 
+                {vehicleInfo.trim && ` ${vehicleInfo.trim}`}
+                {vehicleInfo.color && ` in ${vehicleInfo.color}`}
+              </p>
+              <p style={styles.count}>{images.length} unique images</p>
+            </div>
+            <div style={styles.buttonGroup}>
+              <button onClick={exportPDF} style={{...styles.button, ...styles.greenButton}}>
+                📥 Export PDF
+              </button>
+              <button onClick={resetTool} style={{...styles.button, ...styles.grayButton}}>
+                Start Over
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.imageList}>
+            {images.map((img, index) => {
+              const altText = generateAltText(img.angle);
+              return (
+                <div key={img.id} style={styles.imageCard}>
+                  <img src={img.url} alt="Vehicle preview" style={styles.thumbnail} />
+                  <div style={styles.altTextContainer}>
+                    <label style={styles.label}>Alt Text</label>
+                    <div style={styles.textBoxWrapper}>
+                      <p style={styles.altTextBox}>{altText}</p>
+                      <button
+                        onClick={() => copyToClipboard(altText, index)}
+                        style={styles.copyButton}
+                        title="Copy to clipboard"
+                      >
+                        {copiedIndex === index ? '✓' : '📋'}
+                      </button>
+                    </div>
+                    <p style={styles.charCount}>{altText.length} characters</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.container}>
+      <div style={styles.card}>
+        <div style={styles.headerSection}>
+          <h1 style={styles.mainTitle}>AI SEO Alt Text Generator</h1>
+          <p style={styles.description}>Generate optimized alt text for automotive images</p>
+        </div>
+
+        <div style={styles.form}>
+          <div style={styles.grid}>
+            <div style={styles.inputGroup}>
+              <label style={styles.inputLabel}>Year <span style={styles.required}>*</span></label>
+              <input
+                type="text"
+                value={vehicleInfo.year}
+                onChange={(e) => setVehicleInfo({...vehicleInfo, year: e.target.value})}
+                placeholder="2025"
+                style={styles.input}
+              />
+            </div>
+
+            <div style={styles.inputGroup}>
+              <label style={styles.inputLabel}>Make <span style={styles.required}>*</span></label>
+              <input
+                type="text"
+                value={vehicleInfo.make}
+                onChange={(e) => setVehicleInfo({...vehicleInfo, make: e.target.value})}
+                placeholder="Acura"
+                style={styles.input}
+              />
+            </div>
+
+            <div style={styles.inputGroup}>
+              <label style={styles.inputLabel}>Model <span style={styles.required}>*</span></label>
+              <input
+                type="text"
+                value={vehicleInfo.model}
+                onChange={(e) => setVehicleInfo({...vehicleInfo, model: e.target.value})}
+                placeholder="Integra"
+                style={styles.input}
+              />
+            </div>
+
+            <div style={styles.inputGroup}>
+              <label style={styles.inputLabel}>Trim <span style={styles.optional}>(optional)</span></label>
+              <input
+                type="text"
+                value={vehicleInfo.trim}
+                onChange={(e) => setVehicleInfo({...vehicleInfo, trim: e.target.value})}
+                placeholder="Type S"
+                style={styles.input}
+              />
+            </div>
+
+            <div style={{...styles.inputGroup, gridColumn: '1 / -1'}}>
+              <label style={styles.inputLabel}>Color <span style={styles.optional}>(optional)</span></label>
+              <input
+                type="text"
+                value={vehicleInfo.color}
+                onChange={(e) => setVehicleInfo({...vehicleInfo, color: e.target.value})}
+                placeholder="Apex Blue Pearl"
+                style={styles.input}
+              />
+            </div>
+          </div>
+
+          <div style={styles.uploadBox}>
+            <input
+              type="file"
+              accept=".zip"
+              onChange={handleZipUpload}
+              style={styles.fileInput}
+              id="zip-upload"
+              disabled={!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model || processing}
+            />
+            <label 
+              htmlFor="zip-upload" 
+              style={{
+                ...styles.uploadLabel,
+                opacity: (!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model) ? 0.5 : 1,
+                cursor: (!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model) ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <div style={styles.uploadIcon}>📁</div>
+              <p style={styles.uploadText}>
+                {processing ? 'Processing images...' : 'Click to upload ZIP file with vehicle images'}
+              </p>
+              <p style={styles.uploadSubtext}>
+                {!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model 
+                  ? 'Please fill in required fields first' 
+                  : 'Supports JPG, PNG, WEBP, AVIF'}
+              </p>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const styles = {
+  container: {
+    minHeight: '100vh',
+    background: 'linear-gradient(to bottom right, #f9fafb, #f3f4f6)',
+    padding: '2rem',
+  },
+  card: {
+    maxWidth: '1200px',
+    margin: '0 auto',
+    background: 'white',
+    borderRadius: '12px',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+    padding: '2rem',
+  },
+  headerSection: {
+    marginBottom: '2rem',
+  },
+  mainTitle: {
+    fontSize: '2rem',
+    fontWeight: 'bold',
+    color: '#111827',
+    marginBottom: '0.5rem',
+  },
+  description: {
+    color: '#6b7280',
+  },
+  form: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1.5rem',
+  },
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, 1fr)',
+    gap: '1.5rem',
+  },
+  inputGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  inputLabel: {
+    fontSize: '0.875rem',
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: '0.5rem',
+  },
+  required: {
+    color: '#ef4444',
+  },
+  optional: {
+    color: '#9ca3af',
+    fontSize: '0.75rem',
+  },
+  input: {
+    width: '100%',
+    padding: '0.75rem 1rem',
+    border: '1px solid #d1d5db',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    outline: 'none',
+  },
+  uploadBox: {
+    border: '2px dashed #d1d5db',
+    borderRadius: '8px',
+    padding: '3rem',
+    textAlign: 'center',
+    background: '#f9fafb',
+  },
+  fileInput: {
+    display: 'none',
+  },
+  uploadLabel: {
+    display: 'block',
+  },
+  uploadIcon: {
+    fontSize: '4rem',
+    marginBottom: '1rem',
+  },
+  uploadText: {
+    color: '#374151',
+    fontWeight: '500',
+    marginBottom: '0.5rem',
+  },
+  uploadSubtext: {
+    fontSize: '0.875rem',
+    color: '#6b7280',
+  },
+  header: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: '2rem',
+    paddingBottom: '1rem',
+    borderBottom: '1px solid #e5e7eb',
+  },
+  title: {
+    fontSize: '1.5rem',
+    fontWeight: 'bold',
+    color: '#111827',
+  },
+  subtitle: {
+    color: '#6b7280',
+    marginTop: '0.25rem',
+  },
+  count: {
+    fontSize: '0.875rem',
+    color: '#9ca3af',
+    marginTop: '0.25rem',
+  },
+  buttonGroup: {
+    display: 'flex',
+    gap: '0.75rem',
+  },
+  button: {
+    padding: '0.5rem 1rem',
+    borderRadius: '8px',
+    border: 'none',
+    fontWeight: '500',
+    cursor: 'pointer',
+    fontSize: '0.875rem',
+  },
+  greenButton: {
+    background: '#16a34a',
+    color: 'white',
+  },
+  grayButton: {
+    background: '#4b5563',
+    color: 'white',
+  },
+  imageList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1.5rem',
+  },
+  imageCard: {
+    display: 'flex',
+    gap: '1.5rem',
+    padding: '1.25rem',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+  },
+  thumbnail: {
+    width: '256px',
+    height: '192px',
+    objectFit: 'cover',
+    borderRadius: '8px',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+    flexShrink: 0,
+  },
+  altTextContainer: {
+    flex: 1,
+  },
+  label: {
+    display: 'block',
+    fontSize: '0.875rem',
+    fontWeight: '500',
+    color: '#6b7280',
+    marginBottom: '0.5rem',
+  },
+  textBoxWrapper: {
+    position: 'relative',
+  },
+  altTextBox: {
+    background: '#f9fafb',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+    padding: '1rem 4rem 1rem 1rem',
+    color: '#111827',
+    userSelect: 'text',
+    cursor: 'text',
+  },
+  copyButton: {
+    position: 'absolute',
+    right: '0.5rem',
+    top: '0.5rem',
+    padding: '0.5rem',
+    background: '#2563eb',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '1.25rem',
+  },
+  charCount: {
+    fontSize: '0.875rem',
+    color: '#6b7280',
+    marginTop: '0.5rem',
+  },
+};
