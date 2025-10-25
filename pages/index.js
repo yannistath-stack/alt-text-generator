@@ -1,8 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 
 export default function AltTextGenerator() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  
   const [vehicleInfo, setVehicleInfo] = useState({
     year: '',
     make: '',
@@ -15,6 +19,35 @@ export default function AltTextGenerator() {
   const [showResults, setShowResults] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [processing, setProcessing] = useState(false);
+
+  // PASSWORD CONFIGURATION - Change this to your desired password
+  const CORRECT_PASSWORD = 'AHM.2025'; // <-- CHANGE THIS PASSWORD
+
+  useEffect(() => {
+    // Check if already logged in (session storage)
+    const loggedIn = sessionStorage.getItem('authenticated');
+    if (loggedIn === 'true') {
+      setIsAuthenticated(true);
+    }
+  }, []);
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (passwordInput === CORRECT_PASSWORD) {
+      setIsAuthenticated(true);
+      sessionStorage.setItem('authenticated', 'true');
+      setPasswordError('');
+    } else {
+      setPasswordError('Incorrect password. Please try again.');
+      setPasswordInput('');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    sessionStorage.removeItem('authenticated');
+    setPasswordInput('');
+  };
 
   const capitalize = (str) => {
     if (!str) return '';
@@ -168,6 +201,47 @@ export default function AltTextGenerator() {
     });
   };
 
+  // LOGIN SCREEN
+  if (!isAuthenticated) {
+    return (
+      <div style={styles.loginContainer}>
+        <div style={styles.loginCard}>
+          <div style={styles.loginHeader}>
+            <h1 style={styles.loginTitle}>🔒 AI SEO Alt Text Generator</h1>
+            <p style={styles.loginSubtitle}>Protected Access</p>
+          </div>
+          
+          <form onSubmit={handleLogin} style={styles.loginForm}>
+            <div style={styles.inputGroup}>
+              <label style={styles.loginLabel}>Password</label>
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                placeholder="Enter password"
+                style={styles.loginInput}
+                autoFocus
+              />
+            </div>
+            
+            {passwordError && (
+              <p style={styles.errorMessage}>{passwordError}</p>
+            )}
+            
+            <button type="submit" style={styles.loginButton}>
+              Access Tool
+            </button>
+          </form>
+          
+          <p style={styles.loginFooter}>
+            For authorized Honda/Acura team members only
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // MAIN APP (only shown after login)
   if (showResults) {
     return (
       <div style={styles.container}>
@@ -188,6 +262,9 @@ export default function AltTextGenerator() {
               </button>
               <button onClick={resetTool} style={{...styles.button, ...styles.grayButton}}>
                 Start Over
+              </button>
+              <button onClick={handleLogout} style={{...styles.button, ...styles.redButton}}>
+                🔒 Logout
               </button>
             </div>
           </div>
@@ -225,7 +302,12 @@ export default function AltTextGenerator() {
     <div style={styles.container}>
       <div style={styles.card}>
         <div style={styles.headerSection}>
-          <h1 style={styles.mainTitle}>AI SEO Alt Text Generator</h1>
+          <div style={styles.titleRow}>
+            <h1 style={styles.mainTitle}>AI SEO Alt Text Generator</h1>
+            <button onClick={handleLogout} style={{...styles.button, ...styles.redButton}}>
+              🔒 Logout
+            </button>
+          </div>
           <p style={styles.description}>Generate optimized alt text for automotive images</p>
         </div>
 
@@ -322,6 +404,81 @@ export default function AltTextGenerator() {
 }
 
 const styles = {
+  loginContainer: {
+    minHeight: '100vh',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '2rem',
+  },
+  loginCard: {
+    background: 'white',
+    borderRadius: '16px',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+    padding: '3rem',
+    maxWidth: '400px',
+    width: '100%',
+  },
+  loginHeader: {
+    textAlign: 'center',
+    marginBottom: '2rem',
+  },
+  loginTitle: {
+    fontSize: '1.75rem',
+    fontWeight: 'bold',
+    color: '#111827',
+    marginBottom: '0.5rem',
+  },
+  loginSubtitle: {
+    color: '#6b7280',
+    fontSize: '0.875rem',
+  },
+  loginForm: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1.5rem',
+  },
+  loginLabel: {
+    display: 'block',
+    fontSize: '0.875rem',
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: '0.5rem',
+  },
+  loginInput: {
+    width: '100%',
+    padding: '0.75rem 1rem',
+    border: '2px solid #e5e7eb',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    outline: 'none',
+    transition: 'border-color 0.2s',
+  },
+  loginButton: {
+    width: '100%',
+    padding: '0.875rem',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'transform 0.2s',
+  },
+  errorMessage: {
+    color: '#ef4444',
+    fontSize: '0.875rem',
+    textAlign: 'center',
+    margin: 0,
+  },
+  loginFooter: {
+    textAlign: 'center',
+    fontSize: '0.75rem',
+    color: '#9ca3af',
+    marginTop: '1.5rem',
+  },
   container: {
     minHeight: '100vh',
     background: 'linear-gradient(to bottom right, #f9fafb, #f3f4f6)',
@@ -338,11 +495,16 @@ const styles = {
   headerSection: {
     marginBottom: '2rem',
   },
+  titleRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '0.5rem',
+  },
   mainTitle: {
     fontSize: '2rem',
     fontWeight: 'bold',
     color: '#111827',
-    marginBottom: '0.5rem',
   },
   description: {
     color: '#6b7280',
@@ -448,6 +610,10 @@ const styles = {
   },
   grayButton: {
     background: '#4b5563',
+    color: 'white',
+  },
+  redButton: {
+    background: '#dc2626',
     color: 'white',
   },
   imageList: {
