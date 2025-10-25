@@ -16,16 +16,25 @@ export default function AltTextGenerator() {
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [processing, setProcessing] = useState(false);
 
+  const capitalize = (str) => {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+  };
+
   const detectAngle = (filename) => {
     const lower = filename.toLowerCase();
-    if (lower.includes('front')) return 'front three-quarter view';
-    if (lower.includes('side')) return 'side profile view';
-    if (lower.includes('rear') || lower.includes('back')) return 'rear three-quarter view';
-    if (lower.includes('interior') || lower.includes('inside')) return 'interior dashboard view';
-    if (lower.includes('detail')) return 'detail shot';
-    if (lower.includes('wheel')) return 'wheel detail';
-    if (lower.includes('engine')) return 'engine bay view';
-    return 'three-quarter view';
+    
+    if (lower.match(/front|exterior.*front|facade|grille/i)) return 'front three-quarter view';
+    if (lower.match(/side|profile|lateral/i)) return 'side profile view';
+    if (lower.match(/rear|back/i)) return 'rear three-quarter view';
+    if (lower.match(/interior|inside|cabin|dashboard|cockpit|shifter|steering/i)) return 'interior dashboard view';
+    if (lower.match(/wheel|rim|tire/i)) return 'wheel detail view';
+    if (lower.match(/engine|motor|bay/i)) return 'engine bay view';
+    if (lower.match(/detail|close|macro/i)) return 'detail shot';
+    if (lower.match(/top|aerial|overhead|roof/i)) return 'overhead view';
+    if (lower.match(/trunk|boot|cargo/i)) return 'trunk view';
+    
+    return 'exterior view';
   };
 
   const areImagesSimilar = (name1, name2) => {
@@ -65,7 +74,8 @@ export default function AltTextGenerator() {
             id: Date.now() + Math.random(),
             filename,
             url,
-            angle
+            angle,
+            blob
           });
           
           processedNames.add(filename);
@@ -83,8 +93,13 @@ export default function AltTextGenerator() {
 
   const generateAltText = (angle) => {
     const { year, make, model, trim, color } = vehicleInfo;
-    let altText = `${year} ${make} ${model}`;
-    if (trim) altText += ` ${trim}`;
+    
+    const capitalizedMake = capitalize(make);
+    const capitalizedModel = capitalize(model);
+    const capitalizedTrim = capitalize(trim);
+    
+    let altText = `${year} ${capitalizedMake} ${capitalizedModel}`;
+    if (trim) altText += ` ${capitalizedTrim}`;
     if (color) altText += ` in ${color}`;
     altText += `, ${angle}`;
     return altText;
@@ -96,7 +111,7 @@ export default function AltTextGenerator() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
-  const exportPDF = () => {
+  const exportPDF = async () => {
     const doc = new jsPDF();
     let yPosition = 20;
 
@@ -105,26 +120,38 @@ export default function AltTextGenerator() {
     yPosition += 10;
 
     doc.setFontSize(12);
-    const vehicleText = `${vehicleInfo.year} ${vehicleInfo.make} ${vehicleInfo.model} ${vehicleInfo.trim || ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`;
+    const vehicleText = `${vehicleInfo.year} ${capitalize(vehicleInfo.make)} ${capitalize(vehicleInfo.model)} ${vehicleInfo.trim ? capitalize(vehicleInfo.trim) : ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`;
     doc.text(vehicleText, 20, yPosition);
     yPosition += 15;
 
-    images.forEach((img, index) => {
-      if (yPosition > 250) {
+    for (let index = 0; index < images.length; index++) {
+      const img = images[index];
+      
+      if (yPosition > 220) {
         doc.addPage();
         yPosition = 20;
       }
 
       const altText = generateAltText(img.angle);
       
-      doc.setFontSize(10);
-      doc.text(`Image ${index + 1}:`, 20, yPosition);
-      yPosition += 7;
-      
-      const splitText = doc.splitTextToSize(altText, 170);
-      doc.text(splitText, 20, yPosition);
-      yPosition += (splitText.length * 7) + 10;
-    });
+      try {
+        const imgData = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(img.blob);
+        });
+
+        doc.addImage(imgData, 'JPEG', 20, yPosition, 60, 40);
+        
+        doc.setFontSize(10);
+        const splitText = doc.splitTextToSize(altText, 100);
+        doc.text(splitText, 85, yPosition + 5);
+        
+        yPosition += 50;
+      } catch (error) {
+        console.error('Error adding image to PDF:', error);
+      }
+    }
 
     doc.save('alt-text-report.pdf');
   };
@@ -149,8 +176,8 @@ export default function AltTextGenerator() {
             <div>
               <h1 style={styles.title}>Generated Alt Text</h1>
               <p style={styles.subtitle}>
-                {vehicleInfo.year} {vehicleInfo.make} {vehicleInfo.model} 
-                {vehicleInfo.trim && ` ${vehicleInfo.trim}`}
+                {vehicleInfo.year} {capitalize(vehicleInfo.make)} {capitalize(vehicleInfo.model)} 
+                {vehicleInfo.trim && ` ${capitalize(vehicleInfo.trim)}`}
                 {vehicleInfo.color && ` in ${vehicleInfo.color}`}
               </p>
               <p style={styles.count}>{images.length} unique images</p>
