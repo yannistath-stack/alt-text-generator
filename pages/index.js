@@ -19,12 +19,14 @@ export default function AltTextGenerator() {
   const [showResults, setShowResults] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [processing, setProcessing] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
-  // PASSWORD CONFIGURATION - Change this to your desired password
-  const CORRECT_PASSWORD = 'AHM.2025'; // <-- CHANGE THIS PASSWORD
+  const CORRECT_PASSWORD = 'Honda2025';
+
+  // Known Acura models that should stay uppercase
+  const ACURA_UPPERCASE_MODELS = ['MDX', 'RDX', 'TLX', 'ILX', 'NSX', 'ZDX', 'ADX', 'RLX', 'TSX', 'RSX'];
 
   useEffect(() => {
-    // Check if already logged in (session storage)
     const loggedIn = sessionStorage.getItem('authenticated');
     if (loggedIn === 'true') {
       setIsAuthenticated(true);
@@ -49,25 +51,121 @@ export default function AltTextGenerator() {
     setPasswordInput('');
   };
 
+  const formatModelName = (modelName, make) => {
+    if (!modelName) return '';
+    
+    const upper = modelName.toUpperCase();
+    
+    // Check if it's a known Acura uppercase model
+    if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(upper)) {
+      return upper;
+    }
+    
+    // Otherwise, proper case (first letter uppercase, rest lowercase)
+    return modelName.charAt(0).toUpperCase() + modelName.slice(1).toLowerCase();
+  };
+
   const capitalize = (str) => {
     if (!str) return '';
     return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
   };
 
-  const detectAngle = (filename) => {
-    const lower = filename.toLowerCase();
-    
-    if (lower.match(/front|exterior.*front|facade|grille/i)) return 'front three-quarter view';
-    if (lower.match(/side|profile|lateral/i)) return 'side profile view';
-    if (lower.match(/rear|back/i)) return 'rear three-quarter view';
-    if (lower.match(/interior|inside|cabin|dashboard|cockpit|shifter|steering/i)) return 'interior dashboard view';
-    if (lower.match(/wheel|rim|tire/i)) return 'wheel detail view';
-    if (lower.match(/engine|motor|bay/i)) return 'engine bay view';
-    if (lower.match(/detail|close|macro/i)) return 'detail shot';
-    if (lower.match(/top|aerial|overhead|roof/i)) return 'overhead view';
-    if (lower.match(/trunk|boot|cargo/i)) return 'trunk view';
-    
-    return 'exterior view';
+  const detectAngleFromImage = async (imageUrl, filename) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+          
+          // Analyze image regions
+          const centerX = Math.floor(canvas.width / 2);
+          const topThird = Math.floor(canvas.height / 3);
+          const bottomThird = Math.floor(canvas.height * 2 / 3);
+          
+          let darkPixels = 0;
+          let totalPixels = 0;
+          let leftBrightness = 0;
+          let rightBrightness = 0;
+          let centerBrightness = 0;
+          
+          // Sample pixels
+          for (let y = 0; y < canvas.height; y += 10) {
+            for (let x = 0; x < canvas.width; x += 10) {
+              const i = (y * canvas.width + x) * 4;
+              const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+              
+              totalPixels++;
+              if (brightness < 50) darkPixels++;
+              
+              if (x < canvas.width / 3) leftBrightness += brightness;
+              else if (x > canvas.width * 2 / 3) rightBrightness += brightness;
+              else centerBrightness += brightness;
+            }
+          }
+          
+          const darkRatio = darkPixels / totalPixels;
+          const avgLeft = leftBrightness / (totalPixels / 3);
+          const avgRight = rightBrightness / (totalPixels / 3);
+          const avgCenter = centerBrightness / (totalPixels / 3);
+          
+          // Check filename first for explicit clues
+          const lower = filename.toLowerCase();
+          if (lower.includes('interior') || lower.includes('dashboard') || lower.includes('cabin')) {
+            resolve('interior dashboard view');
+            return;
+          }
+          if (lower.includes('rear') || lower.includes('back')) {
+            resolve('rear three-quarter view');
+            return;
+          }
+          if (lower.includes('side') || lower.includes('profile')) {
+            resolve('side profile view');
+            return;
+          }
+          if (lower.includes('front')) {
+            resolve('front three-quarter view');
+            return;
+          }
+          
+          // Use image analysis
+          if (darkRatio > 0.6) {
+            resolve('interior dashboard view');
+          } else if (Math.abs(avgLeft - avgRight) > 30) {
+            resolve('side profile view');
+          } else if (avgCenter > avgLeft && avgCenter > avgRight) {
+            resolve('front three-quarter view');
+          } else {
+            resolve('exterior view');
+          }
+        } catch (error) {
+          // Fallback to filename-based detection
+          const lower = filename.toLowerCase();
+          if (lower.includes('interior')) resolve('interior dashboard view');
+          else if (lower.includes('rear')) resolve('rear three-quarter view');
+          else if (lower.includes('side')) resolve('side profile view');
+          else resolve('front three-quarter view');
+        }
+      };
+      
+      img.onerror = () => {
+        const lower = filename.toLowerCase();
+        if (lower.includes('interior')) resolve('interior dashboard view');
+        else if (lower.includes('rear')) resolve('rear three-quarter view');
+        else if (lower.includes('side')) resolve('side profile view');
+        else resolve('exterior view');
+      };
+      
+      img.src = imageUrl;
+    });
   };
 
   const areImagesSimilar = (name1, name2) => {
@@ -76,10 +174,7 @@ export default function AltTextGenerator() {
     return clean1 === clean2;
   };
 
-  const handleZipUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
+  const processZipFile = async (file) => {
     setProcessing(true);
     const zip = new JSZip();
     
@@ -101,7 +196,9 @@ export default function AltTextGenerator() {
         if (!isDuplicate) {
           const blob = await zipEntry.async('blob');
           const url = URL.createObjectURL(blob);
-          const angle = detectAngle(filename);
+          
+          // Detect angle from actual image content
+          const angle = await detectAngleFromImage(url, filename);
           
           imageFiles.push({
             id: Date.now() + Math.random(),
@@ -124,14 +221,43 @@ export default function AltTextGenerator() {
     }
   };
 
+  const handleZipUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    await processZipFile(file);
+  };
+
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    const file = e.dataTransfer.files[0];
+    if (file && file.name.endsWith('.zip')) {
+      await processZipFile(file);
+    } else {
+      alert('Please drop a ZIP file');
+    }
+  };
+
   const generateAltText = (angle) => {
     const { year, make, model, trim, color } = vehicleInfo;
     
     const capitalizedMake = capitalize(make);
-    const capitalizedModel = capitalize(model);
-    const capitalizedTrim = capitalize(trim);
+    const formattedModel = formatModelName(model, make);
+    const capitalizedTrim = trim ? capitalize(trim) : '';
     
-    let altText = `${year} ${capitalizedMake} ${capitalizedModel}`;
+    let altText = `${year} ${capitalizedMake} ${formattedModel}`;
     if (trim) altText += ` ${capitalizedTrim}`;
     if (color) altText += ` in ${color}`;
     altText += `, ${angle}`;
@@ -153,7 +279,7 @@ export default function AltTextGenerator() {
     yPosition += 10;
 
     doc.setFontSize(12);
-    const vehicleText = `${vehicleInfo.year} ${capitalize(vehicleInfo.make)} ${capitalize(vehicleInfo.model)} ${vehicleInfo.trim ? capitalize(vehicleInfo.trim) : ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`;
+    const vehicleText = `${vehicleInfo.year} ${capitalize(vehicleInfo.make)} ${formatModelName(vehicleInfo.model, vehicleInfo.make)} ${vehicleInfo.trim ? capitalize(vehicleInfo.trim) : ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`;
     doc.text(vehicleText, 20, yPosition);
     yPosition += 15;
 
@@ -201,7 +327,6 @@ export default function AltTextGenerator() {
     });
   };
 
-  // LOGIN SCREEN
   if (!isAuthenticated) {
     return (
       <div style={styles.loginContainer}>
@@ -241,7 +366,6 @@ export default function AltTextGenerator() {
     );
   }
 
-  // MAIN APP (only shown after login)
   if (showResults) {
     return (
       <div style={styles.container}>
@@ -250,7 +374,7 @@ export default function AltTextGenerator() {
             <div>
               <h1 style={styles.title}>Generated Alt Text</h1>
               <p style={styles.subtitle}>
-                {vehicleInfo.year} {capitalize(vehicleInfo.make)} {capitalize(vehicleInfo.model)} 
+                {vehicleInfo.year} {capitalize(vehicleInfo.make)} {formatModelName(vehicleInfo.model, vehicleInfo.make)} 
                 {vehicleInfo.trim && ` ${capitalize(vehicleInfo.trim)}`}
                 {vehicleInfo.color && ` in ${vehicleInfo.color}`}
               </p>
@@ -341,7 +465,7 @@ export default function AltTextGenerator() {
                 type="text"
                 value={vehicleInfo.model}
                 onChange={(e) => setVehicleInfo({...vehicleInfo, model: e.target.value})}
-                placeholder="Integra"
+                placeholder="ADX"
                 style={styles.input}
               />
             </div>
@@ -369,7 +493,16 @@ export default function AltTextGenerator() {
             </div>
           </div>
 
-          <div style={styles.uploadBox}>
+          <div 
+            style={{
+              ...styles.uploadBox,
+              ...(dragActive ? styles.uploadBoxActive : {})
+            }}
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+          >
             <input
               type="file"
               accept=".zip"
@@ -388,7 +521,7 @@ export default function AltTextGenerator() {
             >
               <div style={styles.uploadIcon}>📁</div>
               <p style={styles.uploadText}>
-                {processing ? 'Processing images...' : 'Click to upload ZIP file with vehicle images'}
+                {processing ? 'Processing images...' : dragActive ? 'Drop ZIP file here' : 'Drag & drop ZIP file or click to browse'}
               </p>
               <p style={styles.uploadSubtext}>
                 {!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model 
@@ -550,6 +683,11 @@ const styles = {
     padding: '3rem',
     textAlign: 'center',
     background: '#f9fafb',
+    transition: 'all 0.2s',
+  },
+  uploadBoxActive: {
+    borderColor: '#3b82f6',
+    background: '#eff6ff',
   },
   fileInput: {
     display: 'none',
