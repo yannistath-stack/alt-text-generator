@@ -51,19 +51,12 @@ export default function AltTextGenerator() {
       .join(' ')
       .replace(/\s{2,}/g, ' ')
       .trim();
-    return parts;
+    return parts || 'vehicle';
   };
 
-  const buildAlt = (descriptor, breakpoint) => {
+  const buildAlt = (descriptor) => {
     const base = subject();
-    const breakpointLabels = {
-      's': 'on mobile view', 'small': 'on mobile view',
-      'm': 'on tablet view', 'medium': 'on tablet view',
-      'l': 'on desktop view', 'large': 'on desktop view',
-      'xl': 'on large screen view', 'xlarge': 'on large screen view',
-    };
-    const bpLabel = breakpoint ? breakpointLabels[breakpoint] || '' : '';
-    const parts = [base, descriptor, bpLabel].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+    const parts = [base, descriptor].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
     return clamp(parts);
   };
 
@@ -72,7 +65,7 @@ export default function AltTextGenerator() {
     return clean(n1) === clean(n2);
   };
 
-  // ---------- Vision Heuristics (expanded and refined) ----------
+  // ---------- Vision Heuristics (refined for accuracy) ----------
   const analyzeImage = (url) =>
     new Promise((resolve) => {
       const img = new Image();
@@ -194,7 +187,7 @@ export default function AltTextGenerator() {
             const sideish = cx < w * 0.25 || cx > w * 0.75;
 
             if (brPts.length > total * 0.008 && lowCenter && spread < Math.min(w, h) * 0.16) {
-              return resolve({ descriptor: 'detail of gear shifter' });
+              return resolve({ descriptor: 'gear shifter close-up' });
             }
             if (
               brPts.length > total * 0.006 &&
@@ -202,17 +195,17 @@ export default function AltTextGenerator() {
               vy > vx * 1.2 &&
               cy > h * 0.25 && cy < h * 0.7
             ) {
-              return resolve({ descriptor: 'detail of paddle shifter' });
+              return resolve({ descriptor: 'paddle shifter detail' });
             }
 
             const wheelRing = ringScore(w / 2, h / 2, Math.min(w, h) * 0.20, Math.min(w, h) * 0.38);
             if (wheelRing > 0.09) {
-              return resolve({ descriptor: 'detail of steering wheel' });
+              return resolve({ descriptor: 'steering wheel detail' });
             }
 
             const midRectBright = midThird / (w * (h / 3) * 255);
             if (midRectBright > 0.55 && avgSat < 0.25) {
-              return resolve({ descriptor: 'detail of infotainment screen' });
+              return resolve({ descriptor: 'infotainment screen display' });
             }
 
             const upperBright = topThird / (w * (h / 3) * 255);
@@ -223,23 +216,23 @@ export default function AltTextGenerator() {
                 else rightPeak = Math.max(rightPeak, colBright[x]);
               }
               if ((leftPeak > 0 && rightPeak > 0) && Math.abs(leftPeak - rightPeak) > 0) {
-                return resolve({ descriptor: 'detail of instrument cluster' });
+                return resolve({ descriptor: 'instrument cluster view' });
               }
             }
 
             if (botThird > midThird * 1.05 && edgeD > 26) {
-              return resolve({ descriptor: 'detail of climate controls' });
+              return resolve({ descriptor: 'climate control panel' });
             }
             if (edgeD > 24 && cy > h * 0.45) {
-              return resolve({ descriptor: 'detail of center console' });
+              return resolve({ descriptor: 'center console interior' });
             }
             if (edgeD > 23 && avgSat > 0.25) {
-              return resolve({ descriptor: 'detail of seat stitching' });
+              return resolve({ descriptor: 'seat stitching detail' });
             }
             if (topThird < midThird && midThird > botThird) {
-              return resolve({ descriptor: 'detail of dashboard' });
+              return resolve({ descriptor: 'dashboard interior' });
             }
-            return resolve({ descriptor: 'interior detail' });
+            return resolve({ descriptor: 'vehicle interior detail' });
           }
 
           // ---------- EXTERIOR ----------
@@ -261,9 +254,9 @@ export default function AltTextGenerator() {
             if (rs > 0.13) {
               const nearWheelBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.22).length;
               if (nearWheelBright > total * 0.004 && avgSat > 0.28) {
-                return resolve({ descriptor: 'detail of brake caliper' });
+                return resolve({ descriptor: 'brake caliper close-up' });
               }
-              return resolve({ descriptor: 'detail of wheel' });
+              return resolve({ descriptor: 'alloy wheel design' });
             }
           }
 
@@ -292,14 +285,14 @@ export default function AltTextGenerator() {
             brightCentroid.cx < w * 0.65;
 
           if (grilleLike && compactBadge) {
-            return resolve({ descriptor: 'detail of grille with emblem' });
+            return resolve({ descriptor: 'grille with emblem logo' });
           }
           if (grilleLike) {
-            if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front view' });
-            return resolve({ descriptor: 'detail of grille' });
+            if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front grille view' });
+            return resolve({ descriptor: 'grille design' });
           }
           if (compactBadge) {
-            return resolve({ descriptor: 'detail of badge' });
+            return resolve({ descriptor: 'vehicle badge emblem' });
           }
 
           // door handle: small bright rectangle on side mid-height near far left/right
@@ -309,7 +302,7 @@ export default function AltTextGenerator() {
               p.y > h * 0.35 && p.y < h * 0.6
           );
           if (doorHandle && sideDiff > 0.03) {
-            return resolve({ descriptor: 'detail of door handle' });
+            return resolve({ descriptor: 'door handle feature' });
           }
 
           // side mirror
@@ -317,25 +310,25 @@ export default function AltTextGenerator() {
             const sideMirror = brPts.some(
               (p) => (p.x < w * 0.12 || p.x > w * 0.88) && p.y > h * 0.3 && p.y < h * 0.7
             );
-            if (sideMirror) return resolve({ descriptor: 'detail of side mirror' });
+            if (sideMirror) return resolve({ descriptor: 'side mirror view' });
           }
 
           // spoiler: narrow bright/edge band along very top width
           const topBand = rowBright.slice(0, Math.max(2, Math.floor(h * 0.06))).reduce((a, v) => a + v, 0);
           if (topBand > midThird * 0.25 && edgeD > 22 && !topViewLikely) {
-            return resolve({ descriptor: 'detail of spoiler' });
+            return resolve({ descriptor: 'rear spoiler design' });
           }
 
           // sunroof (kept)
           if (topThird < midThird * 0.8 && topThird < botThird * 0.8 && grayR > 0.25) {
-            return resolve({ descriptor: 'detail of sunroof' });
+            return resolve({ descriptor: 'sunroof panel' });
           }
 
           // fog light: small bright blobs at very low corners when front-ish
           const lowLeftBright = brPts.filter(p => p.x < w * 0.2 && p.y > h * 0.8).length;
           const lowRightBright = brPts.filter(p => p.x > w * 0.8 && p.y > h * 0.8).length;
           if ((lowLeftBright + lowRightBright) > total * 0.003 && (twin || (brightR > 0.08 && wide))) {
-            return resolve({ descriptor: 'detail of fog light' });
+            return resolve({ descriptor: 'fog light illumination' });
           }
 
           // headlight/taillight (kept)
@@ -343,9 +336,9 @@ export default function AltTextGenerator() {
           const rightLowerBright = brPts.filter(p => p.x > w * 0.75 && p.y > h * 0.55).length;
           if (leftLowerBright + rightLowerBright > total * 0.004) {
             if (twin || (brightR > 0.08 && wide)) {
-              return resolve({ descriptor: 'detail of headlight' });
+              return resolve({ descriptor: 'headlight design' });
             } else {
-              return resolve({ descriptor: 'detail of taillight' });
+              return resolve({ descriptor: 'taillight design' });
             }
           }
 
@@ -361,7 +354,7 @@ export default function AltTextGenerator() {
             return cnt ? e / cnt : 0;
           })();
           if (bottomBandEdges > 18 && botThird < midThird * 0.95 && !topViewLikely) {
-            return resolve({ descriptor: 'detail of rear diffuser' });
+            return resolve({ descriptor: 'rear diffuser component' });
           }
 
           // exhaust tip: small shiny ring-ish near lower outer corners
@@ -373,20 +366,20 @@ export default function AltTextGenerator() {
             const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.04, Math.min(w, h) * 0.09);
             const localBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.12).length;
             if (rs > 0.11 && localBright > total * 0.002) {
-              return resolve({ descriptor: 'detail of exhaust tip' });
+              return resolve({ descriptor: 'exhaust tip feature' });
             }
           }
 
           // Simple exterior views
-          if (topViewLikely) return resolve({ descriptor: 'top view' });
-          if (sideDiff > 0.05) return resolve({ descriptor: 'profile view' });
-          if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front view' });
-          return resolve({ descriptor: 'rear view' });
+          if (topViewLikely) return resolve({ descriptor: 'top aerial view' });
+          if (sideDiff > 0.05) return resolve({ descriptor: 'side profile view' });
+          if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front exterior view' });
+          return resolve({ descriptor: 'rear exterior view' });
         } catch {
-          return resolve({ descriptor: 'front view' });
+          return resolve({ descriptor: 'front exterior view' });
         }
       };
-      img.onerror = () => resolve({ descriptor: 'front view' });
+      img.onerror = () => resolve({ descriptor: 'front exterior view' });
       img.src = url;
     });
 
@@ -425,15 +418,22 @@ export default function AltTextGenerator() {
           const { url: repUrl } = group[0];
           const { descriptor } = await analyzeImage(repUrl);
 
-          // Select the first image as the representative and store all alt texts
-          const repImage = group[0];
+          // Generate alt texts for standard breakpoints only
           const altTexts = {};
-          group.forEach(({ filename, blob, url }) => {
-            const breakpointMatch = filename.match(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)/i);
-            const breakpoint = breakpointMatch ? breakpointMatch[1] : null;
-            altTexts[breakpoint || 'default'] = buildAlt(descriptor, breakpoint);
+          const validBreakpoints = ['s', 'm', 'l', 'xl']; // Limit to these
+          group.forEach(({ filename }) => {
+            const breakpointMatch = filename.match(/[-_](s|m|l|xl)/i);
+            const breakpoint = breakpointMatch ? breakpointMatch[1] : 'default';
+            if (validBreakpoints.includes(breakpoint) && !altTexts[breakpoint]) {
+              altTexts[breakpoint] = buildAlt(descriptor);
+            }
           });
+          if (!altTexts['default'] && Object.keys(altTexts).length === 0) {
+            altTexts['default'] = buildAlt(descriptor);
+          }
 
+          // Use the first image as the representative
+          const repImage = group[0];
           out.push({ id: Date.now() + Math.random(), filename: repImage.filename, url: repImage.url, altTexts, blob: repImage.blob });
         }
       }
@@ -494,7 +494,7 @@ export default function AltTextGenerator() {
       doc.addImage(dataUrl, isPng ? 'PNG' : 'JPEG', 20, y, 60, 40);
       doc.setFontSize(10);
       Object.entries(img.altTexts).forEach(([bp, alt], idx) => {
-        const split = doc.splitTextToSize(`${bp}: ${alt}`, 100);
+        const split = doc.splitTextToSize(`${bp || 'Default'}: ${alt}`, 100);
         doc.text(split, 85, y + 5 + (idx * 10));
       });
       y += 50;
