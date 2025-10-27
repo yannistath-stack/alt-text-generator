@@ -22,297 +22,256 @@ export default function AltTextGenerator() {
   const [dragActive, setDragActive] = useState(false);
 
   const CORRECT_PASSWORD = 'Honda2025';
+  const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
 
-  // Known Acura models that should stay uppercase
-  const ACURA_UPPERCASE_MODELS = ['MDX', 'RDX', 'TLX', 'ILX', 'NSX', 'ZDX', 'ADX', 'RLX', 'TSX', 'RSX'];
-
-  // ===================== AIO AHM v2.5 CANONICALS =====================
-
-  const CANONICAL_VIEWS = {
-    frontThreeQuarter: 'front three-quarter view',
-    rearThreeQuarter: 'rear three-quarter view',
-    sideProfile: 'side profile',
-    frontView: 'front view',
-    rearView: 'rear view',
-    overhead: 'overhead view',
-    exterior: 'exterior view',
-    interiorCabin: 'interior cabin',
-    dashboard: 'dashboard close-up',
-    steeringWheel: 'steering wheel close-up',
-    centerConsole: 'center console close-up',
-    frontSeats: 'front seats',
-    rearSeats: 'rear seats',
-    cargoArea: 'cargo area',
+  // ===== Canonical phrases (AIO AHM v2.5) =====
+  const VIEW = {
+    FRONT_34: 'front three-quarter view',
+    REAR_34: 'rear three-quarter view',
+    SIDE: 'side profile',
+    FRONT: 'front view',
+    REAR: 'rear view',
+    OVERHEAD: 'overhead view',
+    EXTERIOR: 'exterior view',
+    INTERIOR: 'interior cabin',
+    DASH: 'dashboard close-up',
+    WHEEL: 'steering wheel close-up',
+    CONSOLE: 'center console close-up',
+    FRONT_SEATS: 'front seats',
+    REAR_SEATS: 'rear seats',
+    CARGO: 'cargo area',
   };
 
-  // Detail / part canonical phrases
-  const DETAIL_PART_MAP = {
-    grille: 'grille detail',
-    grill: 'grille detail',
-    headlight: 'LED headlight detail',
-    headlamp: 'LED headlight detail',
-    taillight: 'LED taillight detail',
-    tail: 'LED taillight detail',
-    wheel: 'alloy wheel detail',
-    rim: 'alloy wheel detail',
-    badge: 'badge detail',
-    logo: 'badge detail',
-    exhaust: 'exhaust detail',
-    brake: 'brake caliper detail',
-    caliper: 'brake caliper detail',
-    mirror: 'side mirror detail',
-    charging: 'charging port close-up',
-    port: 'charging port close-up',
-    sunroof: 'panoramic roof detail',
-    roof: 'panoramic roof detail',
-    paddle: 'paddle shifter detail',
-    shifter: 'gear selector detail',
-    shift: 'gear selector detail',
-    selector: 'gear selector detail',
-    gear: 'gear selector detail',
-    knob: 'gear selector detail',
+  const DETAIL = {
+    GEAR: 'gear selector detail',
+    PADDLE: 'paddle shifter detail',
+    HEADLIGHT: 'LED headlight detail',
+    TAILLIGHT: 'LED taillight detail',
+    WHEEL: 'alloy wheel detail',
+    BADGE: 'badge detail',
   };
 
-  // UI canonical phrases
-  const UI_PART_MAP = {
-    infotainment: 'infotainment touchscreen display',
-    touchscreen: 'infotainment touchscreen display',
-    screen: 'infotainment touchscreen display',
-    display: 'infotainment touchscreen display',
-    nav: 'navigation map view',
-    map: 'navigation map view',
-    gauge: 'digital gauge cluster',
-    cluster: 'digital gauge cluster',
-    button: 'control button',
-    switch: 'control switch',
-    icon: 'interface icon',
+  const ENV = {
+    NIGHT: 'at night',
+    STUDIO: 'in studio',
+    SHOWROOM: 'in interior showroom',
+    CITY: 'with city skyline',
+    DESERT: 'on a desert highway',
+    MOUNTAIN: 'on a mountain road',
+    SNOW: 'in snow',
+    TRACK: 'at racetrack',
+    TUNNEL: 'in tunnel',
+    GARAGE: 'in garage',
   };
 
-  // Environments (used only if unmistakable)
-  const ENVIRONMENT_PHRASES = {
-    studio: 'in studio',
-    showroom: 'in interior showroom',
-    street: 'on a city street',
-    city: 'with city skyline',
-    skyline: 'with city skyline',
-    desert: 'on a desert highway',
-    mountain: 'on a mountain road',
-    snow: 'in snow',
-    track: 'at racetrack',
-    night: 'at night',
-    sunset: 'at sunset',
-    dusk: 'at sunset',
-    dawn: 'at sunrise',
-    beach: 'near the coast',
-    tunnel: 'in tunnel',
-    garage: 'in garage',
+  // ===== Helpers =====
+  const capitalize = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
+  const formatModelName = (model, make) => {
+    if (!model) return '';
+    const up = model.toUpperCase();
+    if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(up)) return up;
+    return capitalize(model);
+  };
+  const clampAlt = (alt) => alt.length <= 125 ? alt : alt.slice(0,125).trim();
+
+  const subjectLine = () => {
+    const { year, make, model, trim, color } = vehicleInfo;
+    const parts = [
+      year,
+      capitalize(make),
+      formatModelName(model, make),
+      trim ? capitalize(trim) : '',
+      color ? `in ${color}` : ''
+    ].filter(Boolean);
+    return parts.join(' ').replace(/\s{2,}/g,' ').trim();
   };
 
-  // ===================== HELPERS =====================
-
-  const capitalize = (str) => {
-    if (!str) return '';
-    return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
-  };
-
-  const formatModelName = (modelName, make) => {
-    if (!modelName) return '';
-    const upper = modelName.toUpperCase();
-    if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(upper)) return upper;
-    return modelName.charAt(0).toUpperCase() + modelName.slice(1).toLowerCase();
-  };
-
-  const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  // ===================== FILENAME PARSER =====================
-
-  const parseFilenameMetadata = (filenameRaw) => {
-    const filename = filenameRaw.toLowerCase();
-
-    const tokens = filename
-      .replace(/\.[a-z0-9]+$/i, '')
-      .replace(/[-_]+/g, ' ')
-      .split(/\s+/);
-
-    const tokenSet = new Set(tokens);
-    const hasAny = (arr) => arr.some(t => tokenSet.has(t));
-
-    // Category flags
-    let isInterior = false;
-    let isDetail = false;
-    let isUI = false;
-    let part = null;
-    let view = null;
-    let environment = null;
-
-    // Interior/UI detection (highest priority)
-    if (hasAny(['interior','cabin','dashboard','dash','steering','wheel','console','shifter','gear','selector','shift','seat','seats','paddle'])) {
-      isInterior = true;
-    }
-    if (hasAny(['gauge','cluster','screen','display','touchscreen','infotainment','nav','map','button','switch','icon'])) {
-      isInterior = true;
-      isUI = true;
-      for (const key of Object.keys(UI_PART_MAP)) {
-        if (tokens.includes(key)) { part = UI_PART_MAP[key]; break; }
-      }
-      if (!part) part = 'infotainment touchscreen display';
-    }
-
-    // Detail/part detection
-    for (const key of Object.keys(DETAIL_PART_MAP)) {
-      if (tokens.includes(key)) {
-        isDetail = true;
-        part = DETAIL_PART_MAP[key];
-        break;
-      }
-    }
-
-    // Exterior view detection
-    const has34 = hasAny(['3-4','3/4','three-quarter','threequarter','threeq','3q']);
-    if (hasAny(['rear','back']) && has34) view = CANONICAL_VIEWS.rearThreeQuarter;
-    else if (hasAny(['front']) && has34) view = CANONICAL_VIEWS.frontThreeQuarter;
-    else if (hasAny(['side','profile'])) view = CANONICAL_VIEWS.sideProfile;
-    else if (hasAny(['front'])) view = CANONICAL_VIEWS.frontView;
-    else if (hasAny(['rear','back'])) view = CANONICAL_VIEWS.rearView;
-    else if (hasAny(['overhead','top','bird'])) view = CANONICAL_VIEWS.overhead;
-
-    // Interior sub-views (only if not a specific part/UI already)
-    if (isInterior && !isDetail && !isUI) {
-      if (hasAny(['dashboard','dash'])) view = CANONICAL_VIEWS.dashboard;
-      else if (hasAny(['steering','wheel'])) view = CANONICAL_VIEWS.steeringWheel;
-      else if (hasAny(['console','shifter','shift','selector','gear'])) view = CANONICAL_VIEWS.centerConsole;
-      else if (hasAny(['front','driver','passenger']) && hasAny(['seat','seats'])) view = CANONICAL_VIEWS.frontSeats;
-      else if (hasAny(['rear']) && hasAny(['seat','seats'])) view = CANONICAL_VIEWS.rearSeats;
-      else if (hasAny(['cargo','trunk'])) view = CANONICAL_VIEWS.cargoArea;
-      else view = CANONICAL_VIEWS.interiorCabin;
-    }
-
-    // Environment (only when unmistakable in filename)
-    for (const key of Object.keys(ENVIRONMENT_PHRASES)) {
-      if (tokenSet.has(key)) { environment = ENVIRONMENT_PHRASES[key]; break; }
-    }
-
-    return { isInterior, isDetail, isUI, view, part, environment };
-  };
-
-  // ===================== IMAGE FALLBACK (very conservative) =====================
-
-  const analyzeImageFallback = (imageUrl) => {
+  // ===== Visual analyzer (no filename usage) =====
+  async function analyzeImage(url) {
+    // Returns { descriptor: string, environment: string | null }
     return new Promise((resolve) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.onload = () => {
         try {
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          const maxDim = 160;
+          const maxDim = 256;
           const scale = Math.min(maxDim / img.width, maxDim / img.height);
-          canvas.width = Math.max(1, Math.floor(img.width * scale));
-          canvas.height = Math.max(1, Math.floor(img.height * scale));
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const w = Math.max(1, Math.floor(img.width * scale));
+          const h = Math.max(1, Math.floor(img.height * scale));
 
-          const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          let blueCount = 0, darkCount = 0, grayCount = 0, total = width * height;
-          let topBrightness = 0, bottomBrightness = 0;
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const { data } = ctx.getImageData(0, 0, w, h);
 
-          for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-              const i = (y * width + x) * 4;
+          // Basic stats
+          let total = w * h;
+          let dark = 0, bright = 0, blue = 0, gray = 0, satSum = 0;
+          let topBright = 0, bottomBright = 0;
+
+          // Track brightest pixels for centroid/shape
+          const brightPts = [];
+          const veryBrightThresh = 210;
+
+          // Simple Sobel for edge density (luma only)
+          const lum = new Float32Array(total);
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              const i = (y*w + x) * 4;
               const r = data[i], g = data[i+1], b = data[i+2];
-              const bright = (r + g + b) / 3;
-              if (b > 100 && b > r + 25 && b > g + 25) blueCount++;
-              if (Math.abs(r - g) < 18 && Math.abs(g - b) < 18 && Math.abs(r - b) < 18) grayCount++;
-              if (bright < 55) darkCount++;
-              if (y < height/3) topBrightness += bright;
-              if (y > height*2/3) bottomBrightness += bright;
+              const l = 0.2126*r + 0.7152*g + 0.0722*b;
+              lum[y*w + x] = l;
+
+              const brightness = (r+g+b)/3;
+              if (brightness < 55) dark++;
+              if (brightness > 180) bright++;
+              const max = Math.max(r,g,b), min = Math.min(r,g,b);
+              const sat = max === 0 ? 0 : (max - min) / max; // 0..1
+              satSum += sat;
+
+              if (b > 100 && b > r + 25 && b > g + 25) blue++;
+
+              if (Math.abs(r-g) < 15 && Math.abs(g-b) < 15) gray++;
+
+              if (brightness > veryBrightThresh) {
+                brightPts.push({x, y});
+              }
+
+              if (y < h/3) topBright += brightness;
+              if (y > (2*h)/3) bottomBright += brightness;
             }
           }
 
-          const blueRatio = blueCount / total;
-          const darkRatio = darkCount / total;
-          const grayRatio = grayCount / total;
-          const topAvg = topBrightness / (width * Math.floor(height/3));
-          const bottomAvg = bottomBrightness / (width * Math.floor(height/3));
-          const wide = width >= height * 1.15;
+          // Edge density
+          let edgeSum = 0;
+          const sobel = (x,y) => {
+            const gx = (
+              -1*lum[(y-1)*w + (x-1)] + 1*lum[(y-1)*w + (x+1)] +
+              -2*lum[(y  )*w + (x-1)] + 2*lum[(y  )*w + (x+1)] +
+              -1*lum[(y+1)*w + (x-1)] + 1*lum[(y+1)*w + (x+1)]
+            );
+            const gy = (
+               1*lum[(y-1)*w + (x-1)] + 2*lum[(y-1)*w + (x  )] + 1*lum[(y-1)*w + (x+1)] +
+              -1*lum[(y+1)*w + (x-1)] - 2*lum[(y+1)*w + (x  )] - 1*lum[(y+1)*w + (x+1)]
+            );
+            return Math.sqrt(gx*gx + gy*gy);
+          };
+          for (let y = 1; y < h-1; y++) {
+            for (let x = 1; x < w-1; x++) {
+              edgeSum += sobel(x,y);
+            }
+          }
+          const edgeDensity = edgeSum / (w*h);
 
-          // Night exterior cue: very dark overall, not much blue sky
-          if (darkRatio > 0.45 && blueRatio < 0.08 && wide) {
-            return resolve({ view: CANONICAL_VIEWS.frontThreeQuarter, environment: 'at night' });
+          // Ratios
+          const darkRatio = dark / total;
+          const brightRatio = bright / total;
+          const blueRatio = blue / total;
+          const grayRatio = gray / total;
+          const avgSat = satSum / total;
+          const topAvg = topBright / (w * Math.floor(h/3));
+          const bottomAvg = bottomBright / (w * Math.floor(h/3));
+          const wide = w >= h * 1.15;
+
+          // Brightest area centroid and spread
+          let cx = 0, cy = 0;
+          brightPts.forEach(p => { cx += p.x; cy += p.y; });
+          if (brightPts.length) { cx /= brightPts.length; cy /= brightPts.length; }
+          // spread (variance)
+          let vx = 0, vy = 0;
+          brightPts.forEach(p => { vx += (p.x - cx)**2; vy += (p.y - cy)**2; });
+          if (brightPts.length) { vx /= brightPts.length; vy /= brightPts.length; }
+          const spread = Math.sqrt(vx + vy); // lower = compact highlight
+
+          // Horizontal bright histogram (for twin headlights)
+          const cols = new Array(w).fill(0);
+          brightPts.forEach(p => { if (p.y > h*0.5) cols[p.x]++; });
+          // Find two peaks
+          let leftPeak = {x:0,v:0}, rightPeak = {x:0,v:0};
+          for (let x = 0; x < w; x++) {
+            const v = cols[x];
+            if (x < w/2 && v > leftPeak.v) leftPeak = {x,v};
+            if (x >= w/2 && v > rightPeak.v) rightPeak = {x,v};
+          }
+          const twinHeadlights =
+            leftPeak.v > (brightPts.length * 0.02) &&
+            rightPeak.v > (brightPts.length * 0.02) &&
+            Math.abs(leftPeak.x - rightPeak.x) > w*0.25;
+
+          // ===== Classification =====
+
+          // Exterior day: blue sky on top
+          if (blueRatio > 0.12 && topAvg > bottomAvg + 22) {
+            return resolve({ descriptor: VIEW.FRONT_34, environment: null });
           }
 
-          // Day exterior cue: bright top with blue sky
-          if (blueRatio > 0.12 && topAvg > bottomAvg + 25) {
-            return resolve({ view: CANONICAL_VIEWS.frontThreeQuarter, environment: null });
+          // Exterior night: dark overall + wide + twin bright peaks in lower half OR strong bright ratio in lower half
+          if (darkRatio > 0.42 && wide && (twinHeadlights || brightRatio > 0.10) && topAvg <= bottomAvg) {
+            return resolve({ descriptor: VIEW.FRONT_34, environment: ENV.NIGHT });
           }
 
-          // Interior cue: dark-ish + lots of gray tones
-          if (darkRatio > 0.35 && grayRatio > 0.35) {
-            return resolve({ view: CANONICAL_VIEWS.interiorCabin, environment: null });
+          // Interior vs exterior gate:
+          // Interiors: darker, low saturation, gray-heavy, high edge concentration from buttons/trim
+          const interiorScore =
+            (darkRatio > 0.30 ? 1 : 0) +
+            (grayRatio > 0.30 ? 1 : 0) +
+            (avgSat < 0.22 ? 1 : 0) +
+            (edgeDensity > 22 ? 1 : 0); // 22 is empirical for 256px resize
+
+          if (interiorScore >= 2) {
+            // Interior subtype: gear selector vs paddle vs dashboard/console
+            const centerish = (cx > w*0.35 && cx < w*0.65 && cy > h*0.35 && cy < h*0.70);
+            const compactHighlight = spread < Math.min(w,h) * 0.16; // small shiny knob/metal
+            const sideBright = (cx < w*0.25 || cx > w*0.75);
+            const tallShape = vy > vx * 1.4; // elongated vertically (paddle)
+
+            if (brightPts.length > total * 0.01 && centerish && compactHighlight) {
+              return resolve({ descriptor: DETAIL.GEAR, environment: null }); // gear selector
+            }
+            if (brightPts.length > total * 0.01 && sideBright && tallShape) {
+              return resolve({ descriptor: DETAIL.PADDLE, environment: null }); // paddle shifter
+            }
+
+            // Fallback interior labels based on edges near center console area
+            if (edgeDensity > 26) {
+              return resolve({ descriptor: VIEW.CONSOLE, environment: null });
+            }
+            return resolve({ descriptor: VIEW.DASH, environment: null });
           }
 
-          // Default exterior
-          return resolve({ view: CANONICAL_VIEWS.frontThreeQuarter, environment: null });
+          // Default exterior (no sky, not night enough)
+          return resolve({ descriptor: VIEW.FRONT_34, environment: null });
         } catch {
-          return resolve({ view: CANONICAL_VIEWS.exterior, environment: null });
+          return resolve({ descriptor: VIEW.EXTERIOR, environment: null });
         }
       };
-      img.onerror = () => resolve({ view: CANONICAL_VIEWS.exterior, environment: null });
-      img.src = imageUrl;
+      img.onerror = () => resolve({ descriptor: VIEW.EXTERIOR, environment: null });
+      img.src = url;
     });
+  }
+
+  // ===== Build final alt (AIO v2.5) =====
+  const buildAlt = ({descriptor, environment}) => {
+    const subject = subjectLine();
+    let alt = [subject, descriptor, environment || ''].filter(Boolean).join(' ').trim();
+
+    // If >125, drop env -> color -> trim in that order
+    if (alt.length > 125 && environment) {
+      alt = alt.replace(new RegExp(`\\s+${environment.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}$`), '').trim();
+    }
+    const { trim, color } = vehicleInfo;
+    if (alt.length > 125 && color) {
+      alt = alt.replace(new RegExp(`\\s+in\\s+${color.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}`,'i'),'').trim();
+    }
+    if (alt.length > 125 && trim) {
+      alt = alt.replace(new RegExp(`\\s+${trim.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}`,'i'),'').trim();
+    }
+    return clampAlt(alt);
   };
 
-  // ===================== ALT BUILDER (AIO v2.5) =====================
-
-  const buildAltFromMetadata = (meta) => {
-    const { year, make, model, trim, color } = vehicleInfo;
-
-    const capitalizedMake = capitalize(make);
-    const formattedModel = formatModelName(model, make);
-    const capitalizedTrim = trim ? capitalize(trim) : '';
-    const colorText = color ? color : '';
-
-    const subjectParts = [
-      year || '',
-      capitalizedMake || '',
-      formattedModel || '',
-      capitalizedTrim || '',
-      colorText ? `in ${colorText}` : ''
-    ].filter(Boolean);
-
-    const subject = subjectParts.join(' ').replace(/\s{2,}/g, ' ').trim();
-
-    let descriptor = '';
-    if (meta.isUI && meta.part) {
-      descriptor = meta.part;
-    } else if (meta.isDetail && meta.part) {
-      descriptor = meta.part;
-    } else if (meta.view) {
-      descriptor = meta.view;
-    } else {
-      descriptor = CANONICAL_VIEWS.frontThreeQuarter;
-    }
-
-    const env = meta.environment ? meta.environment : '';
-    let alt = [subject, descriptor, env].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
-
-    // Length control ≤125: drop env -> color -> trim
-    const clamp = (s, max = 125) => (s.length <= max ? s : s.slice(0, max).trim());
-
-    if (alt.length > 125 && env) {
-      alt = alt.replace(new RegExp(`\\s+${escapeRegExp(env)}$`), '').trim();
-    }
-    if (alt.length > 125 && colorText) {
-      alt = alt.replace(new RegExp(`\\s+in\\s+${escapeRegExp(colorText)}\\b`, 'i'), '').trim();
-    }
-    if (alt.length > 125 && capitalizedTrim) {
-      alt = alt.replace(new RegExp(`\\s+${escapeRegExp(capitalizedTrim)}\\b`), '').trim();
-    }
-
-    return clamp(alt, 125);
-  };
-
-  // ===================== ZIP PROCESSING =====================
-
+  // ===== ZIP processing (ignores filenames) =====
   const areImagesSimilar = (name1, name2) => {
     const clean1 = name1.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
     const clean2 = name2.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
@@ -322,7 +281,6 @@ export default function AltTextGenerator() {
   const processZipFile = async (file) => {
     setProcessing(true);
     const zip = new JSZip();
-    
     try {
       const contents = await zip.loadAsync(file);
       const imageFiles = [];
@@ -330,36 +288,25 @@ export default function AltTextGenerator() {
 
       for (const [filename, zipEntry] of Object.entries(contents.files)) {
         if (zipEntry.dir) continue;
-        
         const ext = filename.split('.').pop().toLowerCase();
-        if (!['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(ext)) continue;
+        if (!['jpg','jpeg','png','gif','webp','avif'].includes(ext)) continue;
 
-        const isDuplicate = Array.from(processedNames).some(name => 
-          areImagesSimilar(name, filename)
-        );
+        const isDuplicate = Array.from(processedNames).some(n => areImagesSimilar(n, filename));
         if (isDuplicate) continue;
 
         const blob = await zipEntry.async('blob');
         const url = URL.createObjectURL(blob);
 
-        // 1) Filename metadata (primary)
-        let meta = parseFilenameMetadata(filename);
-
-        // 2) If ambiguous, use conservative image fallback
-        if (!meta.view && !meta.part) {
-          const fallback = await analyzeImageFallback(url);
-          meta = { ...meta, ...fallback };
-        }
-
-        // 3) Build compliant alt
-        const alt = buildAltFromMetadata(meta);
+        // Visual analysis (no filename)
+        const analysis = await analyzeImage(url);
+        const alt = buildAlt(analysis);
 
         imageFiles.push({
           id: Date.now() + Math.random(),
           filename,
           url,
           blob,
-          meta,
+          analysis,
           alt,
         });
 
@@ -368,46 +315,33 @@ export default function AltTextGenerator() {
 
       setImages(imageFiles);
       setShowResults(true);
-      setProcessing(false);
-    } catch (error) {
-      console.error(error);
+    } catch (e) {
+      console.error(e);
       alert('Error processing ZIP file. Please try again.');
+    } finally {
       setProcessing(false);
     }
   };
 
-  // ===================== UI ACTIONS =====================
-
-  const handleZipUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    await processZipFile(file);
+  // ===== UI handlers =====
+  const handleZipUpload = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    await processZipFile(f);
   };
 
   const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
+    e.preventDefault(); e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true);
+    else if (e.type === 'dragleave') setDragActive(false);
   };
 
   const handleDrop = async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    
-    const file = e.dataTransfer.files[0];
-    if (file && file.name.endsWith('.zip')) {
-      await processZipFile(file);
-    } else {
-      alert('Please drop a ZIP file');
-    }
+    e.preventDefault(); e.stopPropagation(); setDragActive(false);
+    const f = e.dataTransfer.files[0];
+    if (f && f.name.endsWith('.zip')) await processZipFile(f);
+    else alert('Please drop a ZIP file');
   };
-
-  const generateAltText = (img) => img.alt;
 
   const copyToClipboard = (text, index) => {
     navigator.clipboard.writeText(text);
@@ -417,45 +351,31 @@ export default function AltTextGenerator() {
 
   const exportPDF = async () => {
     const doc = new jsPDF();
-    let yPosition = 20;
+    let y = 20;
 
     doc.setFontSize(18);
-    doc.text('Alt Text Report', 20, yPosition);
-    yPosition += 10;
+    doc.text('Alt Text Report', 20, y); y += 10;
 
     doc.setFontSize(12);
-    const vehicleText = `${vehicleInfo.year} ${capitalize(vehicleInfo.make)} ${formatModelName(vehicleInfo.model, vehicleInfo.make)} ${vehicleInfo.trim ? capitalize(vehicleInfo.trim) : ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`.replace(/\s{2,}/g, ' ').trim();
-    doc.text(vehicleText, 20, yPosition);
-    yPosition += 15;
+    doc.text(subjectLine(), 20, y); y += 15;
 
-    for (let index = 0; index < images.length; index++) {
-      const img = images[index];
-      
-      if (yPosition > 220) {
-        doc.addPage();
-        yPosition = 20;
-      }
+    for (let i = 0; i < images.length; i++) {
+      if (y > 220) { doc.addPage(); y = 20; }
+      const img = images[i];
+      const alt = img.alt;
 
-      const altText = generateAltText(img);
-      
-      try {
-        const imgData = await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result);
-          reader.readAsDataURL(img.blob);
-        });
+      const imgData = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(img.blob);
+      });
 
-        const isPng = img.filename.toLowerCase().endsWith('.png');
-        doc.addImage(imgData, isPng ? 'PNG' : 'JPEG', 20, yPosition, 60, 40);
-        
-        doc.setFontSize(10);
-        const splitText = doc.splitTextToSize(altText, 100);
-        doc.text(splitText, 85, yPosition + 5);
-        
-        yPosition += 50;
-      } catch (error) {
-        console.error('Error adding image to PDF:', error);
-      }
+      const isPng = img.filename.toLowerCase().endsWith('.png');
+      doc.addImage(imgData, isPng ? 'PNG' : 'JPEG', 20, y, 60, 40);
+      doc.setFontSize(10);
+      const split = doc.splitTextToSize(alt, 100);
+      doc.text(split, 85, y + 5);
+      y += 50;
     }
 
     doc.save('alt-text-report.pdf');
@@ -464,29 +384,20 @@ export default function AltTextGenerator() {
   const resetTool = () => {
     setShowResults(false);
     setImages([]);
-    setVehicleInfo({
-      year: '',
-      make: '',
-      model: '',
-      trim: '',
-      color: ''
-    });
+    setVehicleInfo({ year:'', make:'', model:'', trim:'', color:'' });
   };
 
-  // ===================== AUTH & RENDER =====================
-
+  // ===== Auth & render =====
   useEffect(() => {
     const loggedIn = sessionStorage.getItem('authenticated');
-    if (loggedIn === 'true') {
-      setIsAuthenticated(true);
-    }
+    if (loggedIn === 'true') setIsAuthenticated(true);
   }, []);
 
   const handleLogin = (e) => {
     e.preventDefault();
     if (passwordInput === CORRECT_PASSWORD) {
       setIsAuthenticated(true);
-      sessionStorage.setItem('authenticated', 'true');
+      sessionStorage.setItem('authenticated','true');
       setPasswordError('');
     } else {
       setPasswordError('Incorrect password. Please try again.');
@@ -508,7 +419,6 @@ export default function AltTextGenerator() {
             <h1 style={styles.loginTitle}>🔒 AI SEO Alt Text Generator</h1>
             <p style={styles.loginSubtitle}>Protected Access</p>
           </div>
-          
           <form onSubmit={handleLogin} style={styles.loginForm}>
             <div style={styles.inputGroup}>
               <label style={styles.loginLabel}>Password</label>
@@ -521,19 +431,10 @@ export default function AltTextGenerator() {
                 autoFocus
               />
             </div>
-            
-            {passwordError && (
-              <p style={styles.errorMessage}>{passwordError}</p>
-            )}
-            
-            <button type="submit" style={styles.loginButton}>
-              Access Tool
-            </button>
+            {passwordError && <p style={styles.errorMessage}>{passwordError}</p>}
+            <button type="submit" style={styles.loginButton}>Access Tool</button>
           </form>
-          
-          <p style={styles.loginFooter}>
-            For authorized Honda/Acura team members only
-          </p>
+          <p style={styles.loginFooter}>For authorized Honda/Acura team members only</p>
         </div>
       </div>
     );
@@ -547,50 +448,39 @@ export default function AltTextGenerator() {
             <div>
               <h1 style={styles.title}>Generated Alt Text</h1>
               <p style={styles.subtitle}>
-                {vehicleInfo.year} {capitalize(vehicleInfo.make)} {formatModelName(vehicleInfo.model, vehicleInfo.make)} 
-                {vehicleInfo.trim && ` ${capitalize(vehicleInfo.trim)}`}
-                {vehicleInfo.color && ` in ${vehicleInfo.color}`}
+                {subjectLine()}
               </p>
               <p style={styles.count}>{images.length} unique images</p>
             </div>
             <div style={styles.buttonGroup}>
-              <button onClick={exportPDF} style={{...styles.button, ...styles.greenButton}}>
-                📥 Export PDF
-              </button>
-              <button onClick={resetTool} style={{...styles.button, ...styles.grayButton}}>
-                Start Over
-              </button>
-              <button onClick={handleLogout} style={{...styles.button, ...styles.redButton}}>
-                🔒 Logout
-              </button>
+              <button onClick={exportPDF} style={{...styles.button, ...styles.greenButton}}>📥 Export PDF</button>
+              <button onClick={resetTool} style={{...styles.button, ...styles.grayButton}}>Start Over</button>
+              <button onClick={handleLogout} style={{...styles.button, ...styles.redButton}}>🔒 Logout</button>
             </div>
           </div>
 
           <div style={styles.imageList}>
-            {images.map((img, index) => {
-              const altText = generateAltText(img);
-              return (
-                <div key={img.id} style={styles.imageCard}>
-                  <img src={img.url} alt={altText} style={styles.thumbnail} />
-                  <div style={styles.altTextContainer}>
-                    <label style={styles.label}>Alt Text</label>
-                    <div style={styles.textBoxWrapper}>
-                      <p style={styles.altTextBox}>{altText}</p>
-                      <button
-                        onClick={() => copyToClipboard(altText, index)}
-                        style={styles.copyButton}
-                        title="Copy to clipboard"
-                      >
-                        {copiedIndex === index ? '✓' : '📋'}
-                      </button>
-                    </div>
-                    <p style={{...styles.charCount, color: altText.length > 125 ? '#ef4444' : '#6b7280'}}>
-                      {altText.length} characters
-                    </p>
+            {images.map((img, index) => (
+              <div key={img.id} style={styles.imageCard}>
+                <img src={img.url} alt={img.alt} style={styles.thumbnail} />
+                <div style={styles.altTextContainer}>
+                  <label style={styles.label}>Alt Text</label>
+                  <div style={styles.textBoxWrapper}>
+                    <p style={styles.altTextBox}>{img.alt}</p>
+                    <button
+                      onClick={() => copyToClipboard(img.alt, index)}
+                      style={styles.copyButton}
+                      title="Copy to clipboard"
+                    >
+                      {copiedIndex === index ? '✓' : '📋'}
+                    </button>
                   </div>
+                  <p style={{...styles.charCount, color: img.alt.length > 125 ? '#ef4444' : '#6b7280'}}>
+                    {img.alt.length} characters
+                  </p>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -603,9 +493,7 @@ export default function AltTextGenerator() {
         <div style={styles.headerSection}>
           <div style={styles.titleRow}>
             <h1 style={styles.mainTitle}>AI SEO Alt Text Generator</h1>
-            <button onClick={handleLogout} style={{...styles.button, ...styles.redButton}}>
-              🔒 Logout
-            </button>
+            <button onClick={handleLogout} style={{...styles.button, ...styles.redButton}}>🔒 Logout</button>
           </div>
           <p style={styles.description}>Generate optimized alt text for automotive images</p>
         </div>
@@ -622,7 +510,6 @@ export default function AltTextGenerator() {
                 style={styles.input}
               />
             </div>
-
             <div style={styles.inputGroup}>
               <label style={styles.inputLabel}>Make <span style={styles.required}>*</span></label>
               <input
@@ -633,18 +520,16 @@ export default function AltTextGenerator() {
                 style={styles.input}
               />
             </div>
-
             <div style={styles.inputGroup}>
               <label style={styles.inputLabel}>Model <span style={styles.required}>*</span></label>
               <input
                 type="text"
                 value={vehicleInfo.model}
                 onChange={(e) => setVehicleInfo({...vehicleInfo, model: e.target.value})}
-                placeholder="MDX"
+                placeholder="ADX"
                 style={styles.input}
               />
             </div>
-
             <div style={styles.inputGroup}>
               <label style={styles.inputLabel}>Trim <span style={styles.optional}>(optional)</span></label>
               <input
@@ -655,7 +540,6 @@ export default function AltTextGenerator() {
                 style={styles.input}
               />
             </div>
-
             <div style={{...styles.inputGroup, gridColumn: '1 / -1'}}>
               <label style={styles.inputLabel}>Color <span style={styles.optional}>(optional)</span></label>
               <input
@@ -668,11 +552,8 @@ export default function AltTextGenerator() {
             </div>
           </div>
 
-          <div 
-            style={{
-              ...styles.uploadBox,
-              ...(dragActive ? styles.uploadBoxActive : {})
-            }}
+          <div
+            style={{...styles.uploadBox, ...(dragActive ? styles.uploadBoxActive : {})}}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
@@ -686,8 +567,8 @@ export default function AltTextGenerator() {
               id="zip-upload"
               disabled={!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model || processing}
             />
-            <label 
-              htmlFor="zip-upload" 
+            <label
+              htmlFor="zip-upload"
               style={{
                 ...styles.uploadLabel,
                 opacity: (!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model) ? 0.5 : 1,
@@ -699,8 +580,8 @@ export default function AltTextGenerator() {
                 {processing ? 'Processing images...' : dragActive ? 'Drop ZIP file here' : 'Drag & drop ZIP file or click to browse'}
               </p>
               <p style={styles.uploadSubtext}>
-                {!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model 
-                  ? 'Please fill in required fields first' 
+                {!vehicleInfo.year || !vehicleInfo.make || !vehicleInfo.model
+                  ? 'Please fill in required fields first'
                   : 'Supports JPG, PNG, WEBP, AVIF'}
               </p>
             </label>
@@ -711,6 +592,7 @@ export default function AltTextGenerator() {
   );
 }
 
+/* ===== Styles (unchanged) ===== */
 const styles = {
   loginContainer: {
     minHeight: '100vh',
@@ -773,7 +655,6 @@ const styles = {
     fontSize: '1rem',
     fontWeight: '600',
     cursor: 'pointer',
-    transition: 'transform 0.2s',
   },
   errorMessage: {
     color: '#ef4444',
@@ -827,166 +708,34 @@ const styles = {
     gridTemplateColumns: 'repeat(2, 1fr)',
     gap: '1.5rem',
   },
-  inputGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  inputLabel: {
-    fontSize: '0.875rem',
-    fontWeight: '500',
-    color: '#374151',
-    marginBottom: '0.5rem',
-  },
-  required: {
-    color: '#ef4444',
-  },
-  optional: {
-    color: '#9ca3af',
-    fontSize: '0.75rem',
-  },
-  input: {
-    width: '100%',
-    padding: '0.75rem 1rem',
-    border: '1px solid #d1d5db',
-    borderRadius: '8px',
-    fontSize: '1rem',
-    outline: 'none',
-  },
-  uploadBox: {
-    border: '2px dashed #d1d5db',
-    borderRadius: '8px',
-    padding: '3rem',
-    textAlign: 'center',
-    background: '#f9fafb',
-    transition: 'all 0.2s',
-  },
-  uploadBoxActive: {
-    borderColor: '#3b82f6',
-    background: '#eff6ff',
-  },
-  fileInput: {
-    display: 'none',
-  },
-  uploadLabel: {
-    display: 'block',
-  },
-  uploadIcon: {
-    fontSize: '4rem',
-    marginBottom: '1rem',
-  },
-  uploadText: {
-    color: '#374151',
-    fontWeight: '500',
-    marginBottom: '0.5rem',
-  },
-  uploadSubtext: {
-    fontSize: '0.875rem',
-    color: '#6b7280',
-  },
-  header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: '2rem',
-    paddingBottom: '1rem',
-    borderBottom: '1px solid #e5e7eb',
-  },
-  title: {
-    fontSize: '1.5rem',
-    fontWeight: 'bold',
-    color: '#111827',
-  },
-  subtitle: {
-    color: '#6b7280',
-    marginTop: '0.25rem',
-  },
-  count: {
-    fontSize: '0.875rem',
-    color: '#9ca3af',
-    marginTop: '0.25rem',
-  },
-  buttonGroup: {
-    display: 'flex',
-    gap: '0.75rem',
-  },
-  button: {
-    padding: '0.5rem 1rem',
-    borderRadius: '8px',
-    border: 'none',
-    fontWeight: '500',
-    cursor: 'pointer',
-    fontSize: '0.875rem',
-  },
-  greenButton: {
-    background: '#16a34a',
-    color: 'white',
-  },
-  grayButton: {
-    background: '#4b5563',
-    color: 'white',
-  },
-  redButton: {
-    background: '#dc2626',
-    color: 'white',
-  },
-  imageList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '1.5rem',
-  },
-  imageCard: {
-    display: 'flex',
-    gap: '1.5rem',
-    padding: '1.25rem',
-    border: '1px solid #e5e7eb',
-    borderRadius: '8px',
-  },
-  thumbnail: {
-    width: '256px',
-    height: '192px',
-    objectFit: 'cover',
-    borderRadius: '8px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-    flexShrink: 0,
-  },
-  altTextContainer: {
-    flex: 1,
-  },
-  label: {
-    display: 'block',
-    fontSize: '0.875rem',
-    fontWeight: '500',
-    color: '#6b7280',
-    marginBottom: '0.5rem',
-  },
-  textBoxWrapper: {
-    position: 'relative',
-  },
-  altTextBox: {
-    background: '#f9fafb',
-    border: '1px solid #e5e7eb',
-    borderRadius: '8px',
-    padding: '1rem 4rem 1rem 1rem',
-    color: '#111827',
-    userSelect: 'text',
-    cursor: 'text',
-    wordBreak: 'break-word',
-  },
-  copyButton: {
-    position: 'absolute',
-    right: '0.5rem',
-    top: '0.5rem',
-    padding: '0.5rem',
-    background: '#2563eb',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontSize: '1.25rem',
-  },
-  charCount: {
-    fontSize: '0.875rem',
-    color: '#6b7280',
-    marginTop: '0.5rem',
-  },
+  inputGroup: { display: 'flex', flexDirection: 'column' },
+  inputLabel: { fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.5rem' },
+  required: { color: '#ef4444' },
+  optional: { color: '#9ca3af', fontSize: '0.75rem' },
+  input: { width: '100%', padding: '0.75rem 1rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '1rem', outline: 'none' },
+  uploadBox: { border: '2px dashed #d1d5db', borderRadius: '8px', padding: '3rem', textAlign: 'center', background: '#f9fafb', transition: 'all 0.2s' },
+  uploadBoxActive: { borderColor: '#3b82f6', background: '#eff6ff' },
+  fileInput: { display: 'none' },
+  uploadLabel: { display: 'block' },
+  uploadIcon: { fontSize: '4rem', marginBottom: '1rem' },
+  uploadText: { color: '#374151', fontWeight: '500', marginBottom: '0.5rem' },
+  uploadSubtext: { fontSize: '0.875rem', color: '#6b7280' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', paddingBottom: '1rem', borderBottom: '1px solid #e5e7eb' },
+  title: { fontSize: '1.5rem', fontWeight: 'bold', color: '#111827' },
+  subtitle: { color: '#6b7280', marginTop: '0.25rem' },
+  count: { fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' },
+  buttonGroup: { display: 'flex', gap: '0.75rem' },
+  button: { padding: '0.5rem 1rem', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer', fontSize: '0.875rem' },
+  greenButton: { background: '#16a34a', color: 'white' },
+  grayButton: { background: '#4b5563', color: 'white' },
+  redButton: { background: '#dc2626', color: 'white' },
+  imageList: { display: 'flex', flexDirection: 'column', gap: '1.5rem' },
+  imageCard: { display: 'flex', gap: '1.5rem', padding: '1.25rem', border: '1px solid #e5e7eb', borderRadius: '8px' },
+  thumbnail: { width: '256px', height: '192px', objectFit: 'cover', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', flexShrink: 0 },
+  altTextContainer: { flex: 1 },
+  label: { display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' },
+  textBoxWrapper: { position: 'relative' },
+  altTextBox: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem 4rem 1rem 1rem', color: '#111827', userSelect: 'text', cursor: 'text', wordBreak: 'break-word' },
+  copyButton: { position: 'absolute', right: '0.5rem', top: '0.5rem', padding: '0.5rem', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.25rem' },
+  charCount: { fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' },
 };
