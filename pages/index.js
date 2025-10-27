@@ -72,7 +72,7 @@ export default function AltTextGenerator() {
     return clean(n1) === clean(n2);
   };
 
-  // ---------- Vision Heuristics (expanded) ----------
+  // ---------- Vision Heuristics (expanded and refined) ----------
   const analyzeImage = (url) =>
     new Promise((resolve) => {
       const img = new Image();
@@ -425,13 +425,16 @@ export default function AltTextGenerator() {
           const { url: repUrl } = group[0];
           const { descriptor } = await analyzeImage(repUrl);
 
-          // Assign breakpoint-specific alt text to each image in the group
+          // Select the first image as the representative and store all alt texts
+          const repImage = group[0];
+          const altTexts = {};
           group.forEach(({ filename, blob, url }) => {
             const breakpointMatch = filename.match(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)/i);
             const breakpoint = breakpointMatch ? breakpointMatch[1] : null;
-            const alt = buildAlt(descriptor, breakpoint);
-            out.push({ id: Date.now() + Math.random(), filename, url, alt, blob });
+            altTexts[breakpoint || 'default'] = buildAlt(descriptor, breakpoint);
           });
+
+          out.push({ id: Date.now() + Math.random(), filename: repImage.filename, url: repImage.url, altTexts, blob: repImage.blob });
         }
       }
 
@@ -490,8 +493,10 @@ export default function AltTextGenerator() {
       const isPng = img.filename.toLowerCase().endsWith('.png');
       doc.addImage(dataUrl, isPng ? 'PNG' : 'JPEG', 20, y, 60, 40);
       doc.setFontSize(10);
-      const split = doc.splitTextToSize(img.alt, 100);
-      doc.text(split, 85, y + 5);
+      Object.entries(img.altTexts).forEach(([bp, alt], idx) => {
+        const split = doc.splitTextToSize(`${bp}: ${alt}`, 100);
+        doc.text(split, 85, y + 5 + (idx * 10));
+      });
       y += 50;
     }
     doc.save('alt-text-report.pdf');
@@ -575,22 +580,24 @@ export default function AltTextGenerator() {
           <div style={styles.imageList}>
             {images.map((img, index) => (
               <div key={img.id} style={styles.imageCard}>
-                <img src={img.url} alt={img.alt} style={styles.thumbnail} />
+                <img src={img.url} alt={Object.values(img.altTexts)[0]} style={styles.thumbnail} />
                 <div style={styles.altTextContainer}>
                   <label style={styles.label}>Alt Text</label>
-                  <div style={styles.textBoxWrapper}>
-                    <p style={styles.altTextBox}>{img.alt}</p>
-                    <button
-                      onClick={() => copyToClipboard(img.alt, index)}
-                      style={styles.copyButton}
-                      title="Copy to clipboard"
-                    >
-                      {copiedIndex === index ? '✓' : '📋'}
-                    </button>
-                  </div>
-                  <p style={{ ...styles.charCount, color: img.alt.length > 125 ? '#ef4444' : '#6b7280' }}>
-                    {img.alt.length} characters
-                  </p>
+                  {Object.entries(img.altTexts).map(([bp, alt], i) => (
+                    <div key={bp} style={styles.textBoxWrapper}>
+                      <p style={styles.altTextBox}>{alt}</p>
+                      <button
+                        onClick={() => copyToClipboard(alt, `${index}-${i}`)}
+                        style={styles.copyButton}
+                        title="Copy to clipboard"
+                      >
+                        {copiedIndex === `${index}-${i}` ? '✓' : '📋'}
+                      </button>
+                      <p style={{ ...styles.charCount, color: alt.length > 125 ? '#ef4444' : '#6b7280' }}>
+                        {alt.length} characters
+                      </p>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
@@ -758,8 +765,8 @@ const styles = {
   thumbnail: { width: '256px', height: '192px', objectFit: 'cover', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', flexShrink: 0 },
   altTextContainer: { flex: 1 },
   label: { display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' },
-  textBoxWrapper: { position: 'relative' },
-  altTextBox: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem 4rem 1rem 1rem', color: '#111827', userSelect: 'text', cursor: 'text', wordBreak: 'break-word' },
-  copyButton: { position: 'absolute', right: '0.5rem', top: '0.5rem', padding: '0.5rem', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.25rem' },
-  charCount: { fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' },
+  textBoxWrapper: { position: 'relative', marginBottom: '0.5rem' },
+  altTextBox: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '0.5rem 3rem 0.5rem 0.5rem', color: '#111827', userSelect: 'text', cursor: 'text', wordBreak: 'break-word' },
+  copyButton: { position: 'absolute', right: '0.5rem', top: '0.5rem', padding: '0.25rem', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1rem' },
+  charCount: { fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' },
 };
