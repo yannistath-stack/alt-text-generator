@@ -306,32 +306,117 @@ export default function AltTextGenerator() {
   );
 }
 
-const styles={
-  loginContainer:{minHeight:'100vh',display:'flex',justifyContent:'center',alignItems:'center',background:'linear-gradient(135deg,#667eea,#764ba2)'},
-  loginCard:{background:'#fff',borderRadius:'12px',padding:'2rem',boxShadow:'0 10px 30px rgba(0,0,0,0.2)',textAlign:'center'},
-  loginTitle:{fontSize:'1.5rem',fontWeight:'bold',marginBottom:'0.5rem'},
-  loginSubtitle:{color:'#666',marginBottom:'1rem'},
-  loginInput:{width:'100%',padding:'0.75rem',border:'1px solid #ccc',borderRadius:'8px',marginBottom:'1rem'},
-  loginButton:{width:'100%',padding:'0.75rem',background:'#667eea',color:'#fff',border:'none',borderRadius:'8px',cursor:'pointer'},
-  error:{color:'red',fontSize:'0.875rem',marginBottom:'1rem'},
-  loginFooter:{fontSize:'0.75rem',color:'#999'},
-  container:{minHeight:'100vh',background:'#f9fafb',padding:'2rem'},
-  card:{maxWidth:'1200px',margin:'0 auto',background:'#fff',borderRadius:'12px',padding:'2rem',boxShadow:'0 4px 8px rgba(0,0,0,0.1)'},
-  header:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem'},
-  buttonGroup:{display:'flex',gap:'0.5rem'},
-  button:{padding:'0.5rem 1rem',color:'#fff',border:'none',borderRadius:'6px',cursor:'pointer'},
-  imageCard:{display:'flex',gap:'1rem',padding:'1rem',border:'1px solid #eee',borderRadius:'8px',marginBottom:'1rem'},
-  thumbnail:{width:'250px',height:'180px',objectFit:'cover',borderRadius:'8px'},
-  altContainer:{flex:1},
-  textBoxWrapper:{position:'relative'},
-  altText:{background:'#f3f4f6',padding:'1rem',borderRadius:'8px',border:'1px solid #ddd'},
-  copyButton:{position:'absolute',right:'0.5rem',top:'0.5rem',background:'#2563eb',color:'#fff',border:'none',borderRadius:'6px',padding:'0.5rem',cursor:'pointer'},
-  charCount:{fontSize:'0.875rem',color:'#666',marginTop:'0.5rem'},
-  form:{display:'flex',flexDirection:'column',gap:'1rem'},
-  grid:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'1rem'},
-  inputGroup:{display:'flex',flexDirection:'column'},
-  input:{padding:'0.75rem',border:'1px solid #ccc',borderRadius:'8px'},
-  uploadBox:{border:'2px dashed #ccc',padding:'2rem',borderRadius:'8px',textAlign:'center',background:'#f9fafb'},
-  uploadBoxActive:{borderColor:'#3b82f6',background:'#eff6ff'},
-  uploadIcon:{fontSize:'3rem',marginBottom:'0.5rem'},
-  mainTitle:{fontSize:'1.75
+const styles = {
+  // --- Login ---
+  loginContainer: {
+    minHeight: '100vh',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+  },
+  loginCard: {
+    background: '#fff',
+    borderRadius: '12px',
+    padding: '2rem',
+    boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+    textAlign: 'center',
+    maxWidth: '420px',
+    width: '100%'
+  },
+  loginTitle: { fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.5rem' },
+  loginSubtitle: { color: '#666', marginBottom: '1rem' },
+  loginInput: {
+    width: '100%',
+    padding: '0.75rem',
+    border: '1px solid #ccc',
+    borderRadius: '8px',
+    marginBottom: '1rem',
+    outline: 'none'
+  },
+  loginButton: {
+    width: '100%',
+    padding: '0.75rem',
+    background: '#667eea',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '8px',
+    cursor: 'pointer'
+  },
+  error: { color: 'red', fontSize: '0.875rem', marginBottom: '1rem' },
+  loginFooter: { fontSize: '0.75rem', color: '#999', marginTop: '1rem' },
+
+  // --- App Shell ---
+  container: { minHeight: '100vh', background: '#f9fafb', padding: '2rem' },
+  card: {
+    maxWidth: '1200px',
+    margin: '0 auto',
+    background: '#fff',
+    borderRadius: '12px',
+    padding: '2rem',
+    boxShadow: '0 4px 8px rgba(0,0,0,0.1)'
+  },
+
+  // --- Header (results page) ---
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' },
+  title: { fontSize: '1.5rem', fontWeight: 'bold', color: '#111827' },
+  buttonGroup: { display: 'flex', gap: '0.5rem' },
+  button: { padding: '0.5rem 1rem', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' },
+
+  // --- Results List ---
+  imageCard: {
+    display: 'flex',
+    gap: '1rem',
+    padding: '1rem',
+    border: '1px solid #eee',
+    borderRadius: '8px',
+    marginBottom: '1rem'
+  },
+  thumbnail: {
+    width: '250px',
+    height: '180px',
+    objectFit: 'cover',
+    borderRadius: '8px',
+    flexShrink: 0
+  },
+  altContainer: { flex: 1 },
+  textBoxWrapper: { position: 'relative' },
+  altText: {
+    background: '#f3f4f6',
+    padding: '1rem',
+    borderRadius: '8px',
+    border: '1px solid #ddd'
+  },
+  copyButton: {
+    position: 'absolute',
+    right: '0.5rem',
+    top: '0.5rem',
+    background: '#2563eb',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '0.5rem',
+    cursor: 'pointer'
+  },
+  charCount: { fontSize: '0.875rem', color: '#666', marginTop: '0.5rem' },
+
+  // --- Form (upload page) ---
+  headerSection: { marginBottom: '1.25rem' },
+  titleRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' },
+  mainTitle: { fontSize: '1.75rem', fontWeight: 'bold', color: '#111827' },
+  description: { color: '#6b7280' },
+  form: { display: 'flex', flexDirection: 'column', gap: '1rem' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' },
+  inputGroup: { display: 'flex', flexDirection: 'column' },
+  input: { padding: '0.75rem', border: '1px solid #ccc', borderRadius: '8px', outline: 'none' },
+  uploadBox: {
+    border: '2px dashed #ccc',
+    padding: '2rem',
+    borderRadius: '8px',
+    textAlign: 'center',
+    background: '#f9fafb'
+  },
+  uploadBoxActive: { borderColor: '#3b82f6', background: '#eff6ff' },
+  uploadIcon: { fontSize: '3rem', marginBottom: '0.5rem' }
+};
+
