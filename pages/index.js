@@ -1,271 +1,16 @@
+// pages/index.js
 import React, { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 
-/** ─────────────────────────────────────────────────────────────────────────────
- *  CONFIG
- *  ────────────────────────────────────────────────────────────────────────────
- */
-const CORRECT_PASSWORD = 'AHM.2025';
-const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
-
-/** Descriptors */
-const EXTERIOR = {
-  FRONT: 'front view',
-  PROFILE: 'profile view',
-  REAR: 'rear view',
-};
-
-const INTERIOR_DETAIL = {
-  PADDLE: 'detail of paddle shifter',
-  GEAR: 'detail of gear shifter',
-  WHEEL: 'detail of steering wheel',
-  DASH: 'detail of dashboard',
-  CONSOLE: 'detail of center console',
-  INFOTAINMENT: 'detail of infotainment',
-  INTERIOR: 'interior detail',
-};
-
-/** ─────────────────────────────────────────────────────────────────────────────
- *  UTILS
- *  ────────────────────────────────────────────────────────────────────────────
- */
-const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
-const clamp = (s) => (s.length <= 125 ? s : s.slice(0, 125).trim());
-
-/** Acura model rule (uppercase if Acura & known model) */
-function normalizedModel(model, make) {
-  if (!model) return '';
-  const up = model.toUpperCase();
-  if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(up)) return up;
-  return cap(model);
-}
-
-/** Filename normalizer for first-pass dedupe by name */
-function normalizeName(filename) {
-  let base = filename.toLowerCase();
-
-  // strip extension
-  base = base.replace(/\.(jpg|jpeg|png|webp|gif|avif)$/i, '');
-
-  // remove size/scale tokens
-  base = base
-    .replace(/[-_\.](s|m|l|xl|small|medium|large|xlarge)\b/g, '')
-    .replace(/@2x|@3x/gi, '')
-    .replace(/[-_]?(\d{2,5})x(\d{2,5})\b/g, '') // WxH
-    .replace(/[-_]?copy(\s*\d*)?\b/g, '')
-    .replace(/[-_]?final\b/g, '')
-    .replace(/[-_]?v\d+\b/g, '')
-    .replace(/[-_\.]\d{1,4}\b/g, '');
-
-  // collapse dups
-  base = base.replace(/[-_\.]+/g, '-');
-
-  return base.trim();
-}
-
-/** Canvas luminance helper */
-function toImageData(img, target = 256) {
-  const maxDim = target;
-  const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
-  const w = Math.max(1, Math.floor(img.width * scale));
-  const h = Math.max(1, Math.floor(img.height * scale));
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(img, 0, 0, w, h);
-  return { ctx, w, h };
-}
-
-/** Perceptual hash (16x16 grayscale DCT-like quick pHash) */
-function pHash(img) {
-  // downscale to 16x16 grayscale
-  const size = 16;
-  const c = document.createElement('canvas');
-  c.width = size; c.height = size;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(img, 0, 0, size, size);
-  const { data } = ctx.getImageData(0, 0, size, size);
-
-  const gray = new Float32Array(size * size);
-  for (let i = 0; i < size * size; i++) {
-    const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
-    gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
-  }
-  // average
-  let sum = 0;
-  for (let i = 0; i < gray.length; i++) sum += gray[i];
-  const avg = sum / gray.length;
-
-  // bits
-  let bits = '';
-  for (let i = 0; i < gray.length; i++) bits += gray[i] > avg ? '1' : '0';
-  return bits;
-}
-function hamming(a, b) {
-  let d = 0;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
-  return d;
-}
-
-/** ─────────────────────────────────────────────────────────────────────────────
- *  VISUAL CLASSIFIER (FILENAME IGNORED)
- *  ────────────────────────────────────────────────────────────────────────────
- */
-async function analyzeImageURL(url) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const { ctx, w, h } = toImageData(img, 256);
-        const { data } = ctx.getImageData(0, 0, w, h);
-
-        // Stats
-        let dark = 0, satSum = 0, edges = 0;
-        let topBright = 0, midBright = 0, botBright = 0;
-        const lum = new Float32Array(w * h);
-        const satArr = new Float32Array(w * h);
-
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            const i = (y * w + x) * 4;
-            const r = data[i], g = data[i + 1], b = data[i + 2];
-            const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            lum[y * w + x] = l;
-            const max = Math.max(r, g, b), min = Math.min(r, g, b);
-            const s = max === 0 ? 0 : (max - min) / max;
-            satArr[y * w + x] = s;
-
-            if ((r + g + b) / 3 < 55) dark++;
-            if (y < h / 3) topBright += l;
-            else if (y < 2 * h / 3) midBright += l;
-            else botBright += l;
-            satSum += s;
-          }
-        }
-        const total = w * h;
-        const darkR = dark / total;
-        const satAvg = satSum / total;
-
-        // quick sobel edges
-        const sobel = (x, y) => {
-          const ix = y * w + x;
-          const gx =
-            -lum[ix - w - 1] - 2 * lum[ix - 1] - lum[ix + w - 1] +
-            lum[ix - w + 1] + 2 * lum[ix + 1] + lum[ix + w + 1];
-          const gy =
-            lum[ix - w - 1] + 2 * lum[ix - w] + lum[ix - w + 1] -
-            (lum[ix + w - 1] + 2 * lum[ix + w] + lum[ix + w + 1]);
-          return Math.hypot(gx || 0, gy || 0);
-        };
-        for (let y = 1; y < h - 1; y++) {
-          for (let x = 1; x < w - 1; x++) edges += sobel(x, y);
-        }
-        const edgeD = edges / total;
-
-        // Exterior vs interior gate: bright, saturated, and strong horizon-ish edges = exterior
-        const exteriorScore =
-          (darkR < 0.35 ? 1 : 0) +
-          (satAvg > 0.25 ? 1 : 0) +
-          (edgeD > 20 ? 1 : 0);
-
-        if (exteriorScore >= 2) {
-          // Decide front / profile / rear
-          // Heuristics: front tends to have bright cluster left+right upper-mid (headlights),
-          // profile has bright cluster mostly left or mostly right, rear has bright band lower third.
-          const thirds = [0, 0, 0];
-          for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-              const l = lum[y * w + x];
-              if (x < w / 3) thirds[0] += l;
-              else if (x < (2 * w) / 3) thirds[1] += l;
-              else thirds[2] += l;
-            }
-          }
-          const left = thirds[0], mid = thirds[1], right = thirds[2];
-          const upper = topBright, middle = midBright, lower = botBright;
-
-          if ((upper > middle && upper > lower) && Math.abs(left - right) < left * 0.15) {
-            return resolve({ descriptor: EXTERIOR.FRONT });
-          }
-          if ((lower > upper) && (lower > middle)) {
-            return resolve({ descriptor: EXTERIOR.REAR });
-          }
-          return resolve({ descriptor: EXTERIOR.PROFILE });
-        }
-
-        // Interior details
-        // Look for bright compact clusters for metal/knob → gear shifter detail.
-        // Tall side bright streak → paddle shifter detail.
-        // Big circle-ish near middle → steering wheel detail.
-        // Rectangular/edge heavy middle area → center console detail.
-        // Else dashboard / infotainment.
-
-        // Compute bright points map
-        const br = [];
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            const L = lum[y * w + x];
-            if (L > 210) br.push({ x, y });
-          }
-        }
-        // centroid
-        let cx = 0, cy = 0;
-        for (const p of br) { cx += p.x; cy += p.y; }
-        if (br.length) { cx /= br.length; cy /= br.length; }
-
-        // spread
-        let vx = 0, vy = 0;
-        for (const p of br) { vx += (p.x - cx) ** 2; vy += (p.y - cy) ** 2; }
-        if (br.length) { vx /= br.length; vy /= br.length; }
-        const spread = Math.sqrt(vx + vy);
-
-        const centerish = (cx > w * 0.35 && cx < w * 0.65 && cy > h * 0.35 && cy < h * 0.70);
-        const compact = spread < Math.min(w, h) * 0.15;
-        const sideBright = (cx < w * 0.25 || cx > w * 0.75);
-        const tall = vy > vx * 1.4;
-
-        if (br.length > total * 0.008 && centerish && compact) {
-          return resolve({ descriptor: INTERIOR_DETAIL.GEAR });
-        }
-        if (br.length > total * 0.008 && sideBright && tall) {
-          return resolve({ descriptor: INTERIOR_DETAIL.PADDLE });
-        }
-
-        // wheel guess: bright ring-ish in mid-top
-        if (cy < h * 0.55 && vx > vy * 0.8 && vx < vy * 1.2 && !compact) {
-          return resolve({ descriptor: INTERIOR_DETAIL.WHEEL });
-        }
-
-        if (edgeD > 24 && cy >= h * 0.45) {
-          return resolve({ descriptor: INTERIOR_DETAIL.CONSOLE });
-        }
-
-        // infotainment if mid has rectangular edges and sat a bit higher
-        if (edgeD > 20 && satAvg > 0.18 && centerish) {
-          return resolve({ descriptor: INTERIOR_DETAIL.INFOTAINMENT });
-        }
-
-        return resolve({ descriptor: INTERIOR_DETAIL.DASH });
-      } catch {
-        return resolve({ descriptor: EXTERIOR.FRONT });
-      }
-    };
-    img.onerror = () => resolve({ descriptor: EXTERIOR.FRONT });
-    img.src = url;
-  });
-}
-
-/** ─────────────────────────────────────────────────────────────────────────────
- *  MAIN
- *  ────────────────────────────────────────────────────────────────────────────
- */
 export default function AltTextGenerator() {
+  // ---- Auth ----
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const CORRECT_PASSWORD = 'AHM.2025';
 
+  // ---- Vehicle form (Make is optional) ----
   const [vehicleInfo, setVehicleInfo] = useState({
     year: '',
     make: '',
@@ -274,153 +19,397 @@ export default function AltTextGenerator() {
     color: '',
   });
 
+  // ---- App state ----
   const [images, setImages] = useState([]);
   const [showResults, setShowResults] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
-  // auth
-  useEffect(() => {
-    const loggedIn = sessionStorage.getItem('authenticated');
-    if (loggedIn === 'true') setIsAuthenticated(true);
-  }, []);
+  const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    if (passwordInput === CORRECT_PASSWORD) {
-      setIsAuthenticated(true);
-      sessionStorage.setItem('authenticated', 'true');
-      setPasswordError('');
-    } else {
-      setPasswordError('Incorrect password. Please try again.');
-      setPasswordInput('');
-    }
+  // ---- Helpers ----
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
+  const modelName = (m, make) => {
+    if (!m) return '';
+    const up = m.toUpperCase();
+    if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(up)) return up;
+    return cap(m);
   };
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    sessionStorage.removeItem('authenticated');
-    setPasswordInput('');
-  };
+  const clamp = (s) => (s.length <= 125 ? s : s.slice(0, 125).trim());
 
-  /** Subject builder (no commas) */
-  function subject() {
+  const subject = () => {
     const { year, make, model, trim, color } = vehicleInfo;
-    // Make is optional now. Year + Model are required to enable upload, but subject tolerates missing pieces.
-    const mk = make ? cap(make) : '';
-    const mdl = normalizedModel(model, make);
-    const parts = [year || '', mk || '', mdl || '', trim ? cap(trim) : '', color ? `in ${color}` : '']
+    const parts = [
+      year || '',
+      make ? cap(make) : '',
+      modelName(model, make) || '',
+      trim ? cap(trim) : '',
+      color ? `in ${color}` : '',
+    ]
       .filter(Boolean)
       .join(' ')
       .replace(/\s{2,}/g, ' ')
       .trim();
     return parts;
-  }
+  };
 
-  /** Build alt (no commas) */
-  function buildAlt(descriptor) {
-    let alt = [subject(), descriptor].filter(Boolean).join(' ').trim();
-    // Trim down if needed
-    if (alt.length > 125) {
-      // drop color then trim
-      if (vehicleInfo.color) {
-        alt = alt.replace(new RegExp(`\\s+in\\s+${vehicleInfo.color.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'), '').trim();
-      }
-    }
-    if (alt.length > 125 && vehicleInfo.trim) {
-      alt = alt.replace(new RegExp(`\\s+${vehicleInfo.trim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'), '').trim();
-    }
-    return clamp(alt);
-  }
+  const buildAlt = (descriptor) => {
+    const base = subject();
+    const parts = [base, descriptor].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+    return clamp(parts);
+  };
 
-  /** ZIP processor with robust dedupe (name + pHash) */
-  async function processZipFile(file) {
+  const areImagesSimilar = (n1, n2) => {
+    const clean = (s) => s.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
+    return clean(n1) === clean(n2);
+  };
+
+  // ---------- Vision Heuristics (expanded) ----------
+  const analyzeImage = (url) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const maxDim = 256;
+          const scale = Math.min(maxDim / img.width, maxDim / img.height);
+          const w = Math.max(1, Math.floor(img.width * scale));
+          const h = Math.max(1, Math.floor(img.height * scale));
+
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const { data } = ctx.getImageData(0, 0, w, h);
+
+          const total = w * h;
+
+          // Stats
+          let dark = 0, bright = 0, gray = 0, satSum = 0;
+          let edge = 0;
+          const lum = new Float32Array(total);
+
+          const colBright = new Array(w).fill(0);
+          const rowBright = new Array(h).fill(0);
+          const brPts = [];
+
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              const i = (y * w + x) * 4;
+              const r = data[i], g = data[i + 1], b = data[i + 2];
+
+              const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+              lum[y * w + x] = L;
+
+              const bri = (r + g + b) / 3;
+              if (bri < 55) dark++;
+              if (bri > 200) { bright++; brPts.push({ x, y, bri }); }
+              colBright[x] += bri;
+              rowBright[y] += bri;
+
+              const max = Math.max(r, g, b), min = Math.min(r, g, b);
+              const sat = max === 0 ? 0 : (max - min) / max;
+              satSum += sat;
+
+              if (Math.abs(r - g) < 12 && Math.abs(g - b) < 12) gray++;
+            }
+          }
+
+          const sobel = (x, y) => {
+            const idx = (yy, xx) => lum[Math.max(0, Math.min(h - 1, yy)) * w + Math.max(0, Math.min(w - 1, xx))] || 0;
+            const gx =
+              -idx(y - 1, x - 1) + idx(y - 1, x + 1) +
+              -2 * idx(y, x - 1) + 2 * idx(y, x + 1) +
+              -idx(y + 1, x - 1) + idx(y + 1, x + 1);
+            const gy =
+              idx(y - 1, x - 1) + 2 * idx(y - 1, x) + idx(y - 1, x + 1) -
+              (idx(y + 1, x - 1) + 2 * idx(y + 1, x) + idx(y + 1, x + 1));
+            return Math.hypot(gx, gy);
+          };
+          for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) edge += sobel(x, y);
+          }
+
+          const brightR = bright / total;
+          const darkR = dark / total;
+          const avgSat = satSum / total;
+          const grayR = gray / total;
+          const edgeD = edge / total;
+
+          const topThird = rowBright.slice(0, Math.floor(h / 3)).reduce((a, v) => a + v, 0);
+          const midThird = rowBright.slice(Math.floor(h / 3), Math.floor((2 * h) / 3)).reduce((a, v) => a + v, 0);
+          const botThird = rowBright.slice(Math.floor((2 * h) / 3)).reduce((a, v) => a + v, 0);
+
+          const interiorScore =
+            (darkR > 0.30 ? 1 : 0) +
+            (avgSat < 0.22 ? 1 : 0) +
+            (edgeD > 22 ? 1 : 0) +
+            (grayR > 0.28 ? 1 : 0);
+
+          const isInterior = interiorScore >= 2;
+
+          const centroid = (pts) => {
+            if (!pts.length) return { cx: w / 2, cy: h / 2, spread: 9999, vx: 0, vy: 0 };
+            let cx = 0, cy = 0;
+            pts.forEach((p) => { cx += p.x; cy += p.y; });
+            cx /= pts.length; cy /= pts.length;
+            let vx = 0, vy = 0;
+            pts.forEach((p) => { vx += (p.x - cx) ** 2; vy += (p.y - cy) ** 2; });
+            vx /= pts.length; vy /= pts.length;
+            return { cx, cy, spread: Math.sqrt(vx + vy), vx, vy };
+          };
+          const brightCentroid = centroid(brPts);
+
+          const ringScore = (cx, cy, rMin, rMax) => {
+            let hits = 0, samples = 0;
+            for (let yy = Math.max(1, Math.floor(cy - rMax)); yy < Math.min(h - 1, Math.ceil(cy + rMax)); yy++) {
+              for (let xx = Math.max(1, Math.floor(cx - rMax)); xx < Math.min(w - 1, Math.ceil(cx + rMax)); xx++) {
+                const rr = Math.hypot(xx - cx, yy - cy);
+                if (rr >= rMin && rr <= rMax) {
+                  samples++;
+                  const e = Math.abs(
+                    lum[yy * w + xx] -
+                      (lum[yy * w + (xx + 1)] + lum[(yy + 1) * w + xx]) / 2
+                  );
+                  if (e > 25) hits++;
+                }
+              }
+            }
+            return samples ? hits / samples : 0;
+          };
+
+          // ---------- INTERIOR ----------
+          if (isInterior) {
+            const { cx, cy, spread, vx, vy } = brightCentroid;
+            const centerish = cx > w * 0.33 && cx < w * 0.67 && cy > h * 0.35 && cy < h * 0.75;
+            const lowCenter = centerish && cy > h * 0.45;
+            const sideish = cx < w * 0.25 || cx > w * 0.75;
+
+            if (brPts.length > total * 0.008 && lowCenter && spread < Math.min(w, h) * 0.16) {
+              return resolve({ descriptor: 'detail of gear shifter' });
+            }
+            if (
+              brPts.length > total * 0.006 &&
+              sideish &&
+              vy > vx * 1.2 &&
+              cy > h * 0.25 && cy < h * 0.7
+            ) {
+              return resolve({ descriptor: 'detail of paddle shifter' });
+            }
+
+            const wheelRing = ringScore(w / 2, h / 2, Math.min(w, h) * 0.20, Math.min(w, h) * 0.38);
+            if (wheelRing > 0.09) {
+              return resolve({ descriptor: 'detail of steering wheel' });
+            }
+
+            const midRectBright = midThird / (w * (h / 3) * 255);
+            if (midRectBright > 0.55 && avgSat < 0.25) {
+              return resolve({ descriptor: 'detail of infotainment screen' });
+            }
+
+            const upperBright = topThird / (w * (h / 3) * 255);
+            if (upperBright > 0.5 && brPts.length > total * 0.006 && cy < h * 0.45) {
+              let leftPeak = 0, rightPeak = 0;
+              for (let x = 0; x < w; x++) {
+                if (x < w / 2) leftPeak = Math.max(leftPeak, colBright[x]);
+                else rightPeak = Math.max(rightPeak, colBright[x]);
+              }
+              if ((leftPeak > 0 && rightPeak > 0) && Math.abs(leftPeak - rightPeak) > 0) {
+                return resolve({ descriptor: 'detail of instrument cluster' });
+              }
+            }
+
+            if (botThird > midThird * 1.05 && edgeD > 26) {
+              return resolve({ descriptor: 'detail of climate controls' });
+            }
+            if (edgeD > 24 && cy > h * 0.45) {
+              return resolve({ descriptor: 'detail of center console' });
+            }
+            if (edgeD > 23 && avgSat > 0.25) {
+              return resolve({ descriptor: 'detail of seat stitching' });
+            }
+            if (topThird < midThird && midThird > botThird) {
+              return resolve({ descriptor: 'detail of dashboard' });
+            }
+            return resolve({ descriptor: 'interior detail' });
+          }
+
+          // ---------- EXTERIOR ----------
+          const wide = w >= h * 1.15;
+          const leftSum = colBright.slice(0, Math.floor(w / 2)).reduce((a, v) => a + v, 0);
+          const rightSum = colBright.slice(Math.floor(w / 2)).reduce((a, v) => a + v, 0);
+          const sideDiff = Math.abs(leftSum - rightSum) / (total * 255);
+          const topViewLikely = topThird > botThird * 1.18;
+
+          // wheel / brake caliper
+          const corners = [
+            { x: w * 0.2, y: h * 0.75 },
+            { x: w * 0.8, y: h * 0.75 },
+            { x: w * 0.2, y: h * 0.25 },
+            { x: w * 0.8, y: h * 0.25 },
+          ];
+          for (const k of corners) {
+            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.08, Math.min(w, h) * 0.18);
+            if (rs > 0.13) {
+              const nearWheelBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.22).length;
+              if (nearWheelBright > total * 0.004 && avgSat > 0.28) {
+                return resolve({ descriptor: 'detail of brake caliper' });
+              }
+              return resolve({ descriptor: 'detail of wheel' });
+            }
+          }
+
+          // headlights hint (twin lower)
+          const cols = new Array(w).fill(0);
+          brPts.forEach((p) => { if (p.y > h * 0.5) cols[p.x]++; });
+          let L = { x: 0, v: 0 }, R = { x: 0, v: 0 };
+          cols.forEach((v, x) => {
+            if (x < w / 2 && v > L.v) L = { x, v };
+            if (x >= w / 2 && v > R.v) R = { x, v };
+          });
+          const twin = L.v > brPts.length * 0.02 && R.v > brPts.length * 0.02 && Math.abs(L.x - R.x) > w * 0.25;
+
+          // grille & emblem logic
+          let grilleLike = false;
+          let centerVert = 0;
+          for (let x = Math.floor(w * 0.35); x < Math.floor(w * 0.65); x++) centerVert += colBright[x];
+          if (centerVert / (w * h) > 30 && edgeD > 26 && !topViewLikely) {
+            grilleLike = true;
+          }
+          const compactBadge =
+            brPts.length > total * 0.006 &&
+            brightCentroid.spread < Math.min(w, h) * 0.12 &&
+            brightCentroid.cy > h * 0.35 &&
+            brightCentroid.cx > w * 0.35 &&
+            brightCentroid.cx < w * 0.65;
+
+          if (grilleLike && compactBadge) {
+            return resolve({ descriptor: 'detail of grille with emblem' });
+          }
+          if (grilleLike) {
+            if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front view' });
+            return resolve({ descriptor: 'detail of grille' });
+          }
+          if (compactBadge) {
+            return resolve({ descriptor: 'detail of badge' });
+          }
+
+          // door handle: small bright rectangle on side mid-height near far left/right
+          const doorHandle = brPts.some(
+            (p) =>
+              (p.x < w * 0.18 || p.x > w * 0.82) &&
+              p.y > h * 0.35 && p.y < h * 0.6
+          );
+          if (doorHandle && sideDiff > 0.03) {
+            return resolve({ descriptor: 'detail of door handle' });
+          }
+
+          // side mirror
+          if (brPts.length > total * 0.004) {
+            const sideMirror = brPts.some(
+              (p) => (p.x < w * 0.12 || p.x > w * 0.88) && p.y > h * 0.3 && p.y < h * 0.7
+            );
+            if (sideMirror) return resolve({ descriptor: 'detail of side mirror' });
+          }
+
+          // spoiler: narrow bright/edge band along very top width
+          const topBand = rowBright.slice(0, Math.max(2, Math.floor(h * 0.06))).reduce((a, v) => a + v, 0);
+          if (topBand > midThird * 0.25 && edgeD > 22 && !topViewLikely) {
+            return resolve({ descriptor: 'detail of spoiler' });
+          }
+
+          // sunroof (kept)
+          if (topThird < midThird * 0.8 && topThird < botThird * 0.8 && grayR > 0.25) {
+            return resolve({ descriptor: 'detail of sunroof' });
+          }
+
+          // fog light: small bright blobs at very low corners when front-ish
+          const lowLeftBright = brPts.filter(p => p.x < w * 0.2 && p.y > h * 0.8).length;
+          const lowRightBright = brPts.filter(p => p.x > w * 0.8 && p.y > h * 0.8).length;
+          if ((lowLeftBright + lowRightBright) > total * 0.003 && (twin || (brightR > 0.08 && wide))) {
+            return resolve({ descriptor: 'detail of fog light' });
+          }
+
+          // headlight/taillight (kept)
+          const leftLowerBright = brPts.filter(p => p.x < w * 0.25 && p.y > h * 0.55).length;
+          const rightLowerBright = brPts.filter(p => p.x > w * 0.75 && p.y > h * 0.55).length;
+          if (leftLowerBright + rightLowerBright > total * 0.004) {
+            if (twin || (brightR > 0.08 && wide)) {
+              return resolve({ descriptor: 'detail of headlight' });
+            } else {
+              return resolve({ descriptor: 'detail of taillight' });
+            }
+          }
+
+          // rear diffuser: high edge density near bottom center & darker bottom band
+          const bottomBandEdges = (() => {
+            let e = 0, cnt = 0;
+            for (let y = Math.floor(h * 0.8); y < h - 1; y++) {
+              for (let x = Math.floor(w * 0.3); x < Math.floor(w * 0.7); x++) {
+                e += Math.abs(lum[y * w + x] - lum[y * w + (x + 1)]);
+                cnt++;
+              }
+            }
+            return cnt ? e / cnt : 0;
+          })();
+          if (bottomBandEdges > 18 && botThird < midThird * 0.95 && !topViewLikely) {
+            return resolve({ descriptor: 'detail of rear diffuser' });
+          }
+
+          // exhaust tip: small shiny ring-ish near lower outer corners
+          const exCorners = [
+            { x: w * 0.12, y: h * 0.88 },
+            { x: w * 0.88, y: h * 0.88 },
+          ];
+          for (const k of exCorners) {
+            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.04, Math.min(w, h) * 0.09);
+            const localBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.12).length;
+            if (rs > 0.11 && localBright > total * 0.002) {
+              return resolve({ descriptor: 'detail of exhaust tip' });
+            }
+          }
+
+          // Simple exterior views
+          if (topViewLikely) return resolve({ descriptor: 'top view' });
+          if (sideDiff > 0.05) return resolve({ descriptor: 'profile view' });
+          if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front view' });
+          return resolve({ descriptor: 'rear view' });
+        } catch {
+          return resolve({ descriptor: 'front view' });
+        }
+      };
+      img.onerror = () => resolve({ descriptor: 'front view' });
+      img.src = url;
+    });
+
+  // ---- ZIP processing ----
+  const processZipFile = async (file) => {
     setProcessing(true);
     const zip = new JSZip();
-
     try {
       const contents = await zip.loadAsync(file);
-      const entries = Object.entries(contents.files);
+      const out = [];
+      const seen = new Set();
 
-      // 1) Filter image file entries
-      const candidates = [];
-      for (const [filename, entry] of entries) {
+      for (const [filename, entry] of Object.entries(contents.files)) {
         if (entry.dir) continue;
         const ext = filename.split('.').pop().toLowerCase();
         if (!['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(ext)) continue;
-        candidates.push({ filename, entry });
-      }
+        if (Array.from(seen).some((n) => areImagesSimilar(n, filename))) continue;
 
-      // 2) First-pass dedupe by normalized name → keep only one filename per group (arbitrary; we’ll do pHash later)
-      const byName = new Map();
-      for (const c of candidates) {
-        const key = normalizeName(c.filename);
-        if (!byName.has(key)) byName.set(key, []);
-        byName.get(key).push(c);
-      }
-
-      // Flatten (still possibly multiple size variants per group)
-      const nameGroups = Array.from(byName.values()).flat();
-
-      // 3) Load each image to get blob/url + area + pHash
-      const items = [];
-      for (const c of nameGroups) {
-        const blob = await c.entry.async('blob');
+        const blob = await entry.async('blob');
         const url = URL.createObjectURL(blob);
-        const img = await new Promise((res) => {
-          const im = new Image();
-          im.onload = () => res(im);
-          im.onerror = () => res(null);
-          im.src = url;
-        });
-        if (!img) continue;
-        const hash = pHash(img);
-        const area = img.width * img.height;
 
-        items.push({
-          id: Math.random(),
-          filename: c.filename,
-          url,
-          blob,
-          width: img.width,
-          height: img.height,
-          area,
-          hash,
-        });
+        const { descriptor } = await analyzeImage(url); // filename ignored
+        const alt = buildAlt(descriptor);
+
+        out.push({ id: Date.now() + Math.random(), filename, url, alt, blob });
+        seen.add(filename);
       }
 
-      // 4) Group by pHash (hamming ≤ 10) and keep largest area per group
-      const taken = new Set();
-      const groups = [];
-
-      for (let i = 0; i < items.length; i++) {
-        if (taken.has(items[i])) continue;
-        const group = [items[i]];
-        for (let j = i + 1; j < items.length; j++) {
-          if (taken.has(items[j])) continue;
-          if (hamming(items[i].hash, items[j].hash) <= 10) {
-            group.push(items[j]);
-            taken.add(items[j]);
-          }
-        }
-        groups.push(group);
-      }
-
-      // select largest from each group
-      const deduped = groups.map(g => g.sort((a, b) => b.area - a.area)[0]);
-
-      // 5) Visual analysis for each deduped image (filename ignored entirely)
-      const analyzed = [];
-      for (const img of deduped) {
-        const { descriptor } = await analyzeImageURL(img.url);
-        analyzed.push({
-          ...img,
-          descriptor,
-          alt: buildAlt(descriptor),
-        });
-      }
-
-      setImages(analyzed);
+      setImages(out);
       setShowResults(true);
     } catch (e) {
       console.error(e);
@@ -428,23 +417,21 @@ export default function AltTextGenerator() {
     } finally {
       setProcessing(false);
     }
-  }
+  };
 
-  /** UI handlers */
+  // ---- UI handlers ----
   const handleZipUpload = async (e) => {
     const f = e.target.files[0];
     if (!f) return;
     await processZipFile(f);
   };
   const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true);
     else if (e.type === 'dragleave') setDragActive(false);
   };
   const handleDrop = async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     setDragActive(false);
     const f = e.dataTransfer.files[0];
     if (f && f.name.endsWith('.zip')) await processZipFile(f);
@@ -459,8 +446,13 @@ export default function AltTextGenerator() {
   const exportPDF = async () => {
     const doc = new jsPDF();
     let y = 20;
-    doc.setFontSize(18); doc.text('Alt Text Report', 20, y); y += 10;
-    doc.setFontSize(12); doc.text(subject() || 'Vehicle images', 20, y); y += 15;
+    doc.setFontSize(18);
+    doc.text('Alt Text Report', 20, y);
+    y += 10;
+
+    doc.setFontSize(12);
+    doc.text(subject() || 'Vehicle images', 20, y);
+    y += 15;
 
     for (const img of images) {
       if (y > 220) { doc.addPage(); y = 20; }
@@ -485,7 +477,29 @@ export default function AltTextGenerator() {
     setVehicleInfo({ year: '', make: '', model: '', trim: '', color: '' });
   };
 
-  /** ───────────────── UI ───────────────── */
+  // ---- Auth ----
+  useEffect(() => {
+    const logged = sessionStorage.getItem('authenticated');
+    if (logged === 'true') setIsAuthenticated(true);
+  }, []);
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (passwordInput === CORRECT_PASSWORD) {
+      setIsAuthenticated(true);
+      sessionStorage.setItem('authenticated', 'true');
+      setPasswordError('');
+    } else {
+      setPasswordError('Incorrect password. Please try again.');
+      setPasswordInput('');
+    }
+  };
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    sessionStorage.removeItem('authenticated');
+    setPasswordInput('');
+  };
+
+  // ---------------- RENDER ----------------
   if (!isAuthenticated) {
     return (
       <div style={styles.loginContainer}>
@@ -548,7 +562,9 @@ export default function AltTextGenerator() {
                       {copiedIndex === index ? '✓' : '📋'}
                     </button>
                   </div>
-                  <p style={styles.charCount}>{img.alt.length} characters</p>
+                  <p style={{ ...styles.charCount, color: img.alt.length > 125 ? '#ef4444' : '#6b7280' }}>
+                    {img.alt.length} characters
+                  </p>
                 </div>
               </div>
             ))}
@@ -558,7 +574,7 @@ export default function AltTextGenerator() {
     );
   }
 
-  const canUpload = Boolean(vehicleInfo.year && vehicleInfo.model); // ONLY year+model required
+  const requiredFilled = !!vehicleInfo.year && !!vehicleInfo.model;
 
   return (
     <div style={styles.container}>
@@ -583,7 +599,6 @@ export default function AltTextGenerator() {
                 style={styles.input}
               />
             </div>
-
             <div style={styles.inputGroup}>
               <label style={styles.inputLabel}>Model <span style={styles.required}>*</span></label>
               <input
@@ -594,7 +609,6 @@ export default function AltTextGenerator() {
                 style={styles.input}
               />
             </div>
-
             <div style={styles.inputGroup}>
               <label style={styles.inputLabel}>Make <span style={styles.optional}>(optional)</span></label>
               <input
@@ -605,7 +619,6 @@ export default function AltTextGenerator() {
                 style={styles.input}
               />
             </div>
-
             <div style={styles.inputGroup}>
               <label style={styles.inputLabel}>Trim <span style={styles.optional}>(optional)</span></label>
               <input
@@ -616,7 +629,6 @@ export default function AltTextGenerator() {
                 style={styles.input}
               />
             </div>
-
             <div style={{ ...styles.inputGroup, gridColumn: '1 / -1' }}>
               <label style={styles.inputLabel}>Color <span style={styles.optional}>(optional)</span></label>
               <input
@@ -642,14 +654,14 @@ export default function AltTextGenerator() {
               onChange={handleZipUpload}
               style={styles.fileInput}
               id="zip-upload"
-              disabled={!canUpload || processing}
+              disabled={!requiredFilled || processing}
             />
             <label
               htmlFor="zip-upload"
               style={{
                 ...styles.uploadLabel,
-                opacity: canUpload ? 1 : 0.5,
-                cursor: canUpload ? 'pointer' : 'not-allowed'
+                opacity: requiredFilled ? 1 : 0.5,
+                cursor: requiredFilled ? 'pointer' : 'not-allowed',
               }}
             >
               <div style={styles.uploadIcon}>📁</div>
@@ -657,7 +669,7 @@ export default function AltTextGenerator() {
                 {processing ? 'Processing images...' : dragActive ? 'Drop ZIP file here' : 'Drag & drop ZIP file or click to browse'}
               </p>
               <p style={styles.uploadSubtext}>
-                {canUpload ? 'Supports JPG, PNG, WEBP, AVIF' : 'Please fill Year and Model first'}
+                {requiredFilled ? 'Supports JPG, PNG, WEBP, AVIF' : 'Please fill in Year and Model first'}
               </p>
             </label>
           </div>
@@ -667,19 +679,9 @@ export default function AltTextGenerator() {
   );
 }
 
-/** ─────────────────────────────────────────────────────────────────────────────
- *  STYLES
- *  ────────────────────────────────────────────────────────────────────────────
- */
+/* ---------- Styles ---------- */
 const styles = {
-  loginContainer: {
-    minHeight: '100vh',
-    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '2rem',
-  },
+  loginContainer: { minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' },
   loginCard: { background: 'white', borderRadius: '16px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', padding: '3rem', maxWidth: '400px', width: '100%' },
   loginHeader: { textAlign: 'center', marginBottom: '2rem' },
   loginTitle: { fontSize: '1.75rem', fontWeight: 'bold', color: '#111827', marginBottom: '0.5rem' },
@@ -687,7 +689,7 @@ const styles = {
   loginForm: { display: 'flex', flexDirection: 'column', gap: '1.5rem' },
   loginLabel: { display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.5rem' },
   loginInput: { width: '100%', padding: '0.75rem 1rem', border: '2px solid #e5e7eb', borderRadius: '8px', fontSize: '1rem', outline: 'none' },
-  loginButton: { width: '100%', padding: '0.875rem', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: '600', cursor: 'pointer' },
+  loginButton: { width: '100%', padding: '0.875rem', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer' },
   errorMessage: { color: '#ef4444', fontSize: '0.875rem', textAlign: 'center', margin: 0 },
   loginFooter: { textAlign: 'center', fontSize: '0.75rem', color: '#9ca3af', marginTop: '1.5rem' },
 
@@ -695,8 +697,8 @@ const styles = {
   card: { maxWidth: '1200px', margin: '0 auto', background: 'white', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', padding: '2rem' },
 
   headerSection: { marginBottom: '2rem' },
-  titleRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' },
-  mainTitle: { fontSize: '1.75rem', fontWeight: 'bold', color: '#111827' },
+  titleRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  mainTitle: { fontSize: '2rem', fontWeight: 'bold', color: '#111827' },
   description: { color: '#6b7280' },
 
   form: { display: 'flex', flexDirection: 'column', gap: '1.5rem' },
@@ -707,15 +709,15 @@ const styles = {
   optional: { color: '#9ca3af', fontSize: '0.75rem' },
   input: { width: '100%', padding: '0.75rem 1rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '1rem', outline: 'none' },
 
-  uploadBox: { border: '2px dashed #d1d5db', borderRadius: '8px', padding: '2rem', textAlign: 'center', background: '#f9fafb', transition: 'all 0.2s' },
+  uploadBox: { border: '2px dashed #d1d5db', borderRadius: '8px', padding: '3rem', textAlign: 'center', background: '#f9fafb', transition: 'all 0.2s' },
   uploadBoxActive: { borderColor: '#3b82f6', background: '#eff6ff' },
   fileInput: { display: 'none' },
   uploadLabel: { display: 'block' },
-  uploadIcon: { fontSize: '3rem', marginBottom: '0.5rem' },
+  uploadIcon: { fontSize: '4rem', marginBottom: '1rem' },
   uploadText: { color: '#374151', fontWeight: '500', marginBottom: '0.5rem' },
   uploadSubtext: { fontSize: '0.875rem', color: '#6b7280' },
 
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', paddingBottom: '1rem', borderBottom: '1px solid #e5e7eb' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', margin: '0 0 2rem', paddingBottom: '1rem', borderBottom: '1px solid #e5e7eb' },
   title: { fontSize: '1.5rem', fontWeight: 'bold', color: '#111827' },
   subtitle: { color: '#6b7280', marginTop: '0.25rem' },
   count: { fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem' },
