@@ -21,7 +21,7 @@ export default function AltTextGenerator() {
   const [processing, setProcessing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
-  const CORRECT_PASSWORD = 'Honda2025';
+  const CORRECT_PASSWORD = 'AHM.2025';
   const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
 
   // Canonical labels (AIO v2.5)
