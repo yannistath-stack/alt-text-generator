@@ -26,182 +26,292 @@ export default function AltTextGenerator() {
   // Known Acura models that should stay uppercase
   const ACURA_UPPERCASE_MODELS = ['MDX', 'RDX', 'TLX', 'ILX', 'NSX', 'ZDX', 'ADX', 'RLX', 'TSX', 'RSX'];
 
-  useEffect(() => {
-    const loggedIn = sessionStorage.getItem('authenticated');
-    if (loggedIn === 'true') {
-      setIsAuthenticated(true);
-    }
-  }, []);
+  // ===================== AIO AHM v2.5 CANONICALS =====================
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    if (passwordInput === CORRECT_PASSWORD) {
-      setIsAuthenticated(true);
-      sessionStorage.setItem('authenticated', 'true');
-      setPasswordError('');
-    } else {
-      setPasswordError('Incorrect password. Please try again.');
-      setPasswordInput('');
-    }
+  const CANONICAL_VIEWS = {
+    frontThreeQuarter: 'front three-quarter view',
+    rearThreeQuarter: 'rear three-quarter view',
+    sideProfile: 'side profile',
+    frontView: 'front view',
+    rearView: 'rear view',
+    overhead: 'overhead view',
+    exterior: 'exterior view',
+    interiorCabin: 'interior cabin',
+    dashboard: 'dashboard close-up',
+    steeringWheel: 'steering wheel close-up',
+    centerConsole: 'center console close-up',
+    frontSeats: 'front seats',
+    rearSeats: 'rear seats',
+    cargoArea: 'cargo area',
   };
 
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    sessionStorage.removeItem('authenticated');
-    setPasswordInput('');
+  // Detail / part canonical phrases
+  const DETAIL_PART_MAP = {
+    grille: 'grille detail',
+    grill: 'grille detail',
+    headlight: 'LED headlight detail',
+    headlamp: 'LED headlight detail',
+    taillight: 'LED taillight detail',
+    tail: 'LED taillight detail',
+    wheel: 'alloy wheel detail',
+    rim: 'alloy wheel detail',
+    badge: 'badge detail',
+    logo: 'badge detail',
+    exhaust: 'exhaust detail',
+    brake: 'brake caliper detail',
+    caliper: 'brake caliper detail',
+    mirror: 'side mirror detail',
+    charging: 'charging port close-up',
+    port: 'charging port close-up',
+    sunroof: 'panoramic roof detail',
+    roof: 'panoramic roof detail',
+    paddle: 'paddle shifter detail',
+    shifter: 'gear selector detail',
+    shift: 'gear selector detail',
+    selector: 'gear selector detail',
+    gear: 'gear selector detail',
+    knob: 'gear selector detail',
   };
 
-  const formatModelName = (modelName, make) => {
-    if (!modelName) return '';
-    
-    const upper = modelName.toUpperCase();
-    
-    // Check if it's a known Acura uppercase model
-    if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(upper)) {
-      return upper;
-    }
-    
-    // Otherwise, proper case (first letter uppercase, rest lowercase)
-    return modelName.charAt(0).toUpperCase() + modelName.slice(1).toLowerCase();
+  // UI canonical phrases
+  const UI_PART_MAP = {
+    infotainment: 'infotainment touchscreen display',
+    touchscreen: 'infotainment touchscreen display',
+    screen: 'infotainment touchscreen display',
+    display: 'infotainment touchscreen display',
+    nav: 'navigation map view',
+    map: 'navigation map view',
+    gauge: 'digital gauge cluster',
+    cluster: 'digital gauge cluster',
+    button: 'control button',
+    switch: 'control switch',
+    icon: 'interface icon',
   };
+
+  // Environments (used only if unmistakable)
+  const ENVIRONMENT_PHRASES = {
+    studio: 'in studio',
+    showroom: 'in interior showroom',
+    street: 'on a city street',
+    city: 'with city skyline',
+    skyline: 'with city skyline',
+    desert: 'on a desert highway',
+    mountain: 'on a mountain road',
+    snow: 'in snow',
+    track: 'at racetrack',
+    night: 'at night',
+    sunset: 'at sunset',
+    dusk: 'at sunset',
+    dawn: 'at sunrise',
+    beach: 'near the coast',
+    tunnel: 'in tunnel',
+    garage: 'in garage',
+  };
+
+  // ===================== HELPERS =====================
 
   const capitalize = (str) => {
     if (!str) return '';
     return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
   };
 
-  const detectAngleFromImage = async (imageUrl, filename) => {
+  const formatModelName = (modelName, make) => {
+    if (!modelName) return '';
+    const upper = modelName.toUpperCase();
+    if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(upper)) return upper;
+    return modelName.charAt(0).toUpperCase() + modelName.slice(1).toLowerCase();
+  };
+
+  const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // ===================== FILENAME PARSER =====================
+
+  const parseFilenameMetadata = (filenameRaw) => {
+    const filename = filenameRaw.toLowerCase();
+
+    const tokens = filename
+      .replace(/\.[a-z0-9]+$/i, '')
+      .replace(/[-_]+/g, ' ')
+      .split(/\s+/);
+
+    const tokenSet = new Set(tokens);
+    const hasAny = (arr) => arr.some(t => tokenSet.has(t));
+
+    // Category flags
+    let isInterior = false;
+    let isDetail = false;
+    let isUI = false;
+    let part = null;
+    let view = null;
+    let environment = null;
+
+    // Interior/UI detection (highest priority)
+    if (hasAny(['interior','cabin','dashboard','dash','steering','wheel','console','shifter','gear','selector','shift','seat','seats','paddle'])) {
+      isInterior = true;
+    }
+    if (hasAny(['gauge','cluster','screen','display','touchscreen','infotainment','nav','map','button','switch','icon'])) {
+      isInterior = true;
+      isUI = true;
+      for (const key of Object.keys(UI_PART_MAP)) {
+        if (tokens.includes(key)) { part = UI_PART_MAP[key]; break; }
+      }
+      if (!part) part = 'infotainment touchscreen display';
+    }
+
+    // Detail/part detection
+    for (const key of Object.keys(DETAIL_PART_MAP)) {
+      if (tokens.includes(key)) {
+        isDetail = true;
+        part = DETAIL_PART_MAP[key];
+        break;
+      }
+    }
+
+    // Exterior view detection
+    const has34 = hasAny(['3-4','3/4','three-quarter','threequarter','threeq','3q']);
+    if (hasAny(['rear','back']) && has34) view = CANONICAL_VIEWS.rearThreeQuarter;
+    else if (hasAny(['front']) && has34) view = CANONICAL_VIEWS.frontThreeQuarter;
+    else if (hasAny(['side','profile'])) view = CANONICAL_VIEWS.sideProfile;
+    else if (hasAny(['front'])) view = CANONICAL_VIEWS.frontView;
+    else if (hasAny(['rear','back'])) view = CANONICAL_VIEWS.rearView;
+    else if (hasAny(['overhead','top','bird'])) view = CANONICAL_VIEWS.overhead;
+
+    // Interior sub-views (only if not a specific part/UI already)
+    if (isInterior && !isDetail && !isUI) {
+      if (hasAny(['dashboard','dash'])) view = CANONICAL_VIEWS.dashboard;
+      else if (hasAny(['steering','wheel'])) view = CANONICAL_VIEWS.steeringWheel;
+      else if (hasAny(['console','shifter','shift','selector','gear'])) view = CANONICAL_VIEWS.centerConsole;
+      else if (hasAny(['front','driver','passenger']) && hasAny(['seat','seats'])) view = CANONICAL_VIEWS.frontSeats;
+      else if (hasAny(['rear']) && hasAny(['seat','seats'])) view = CANONICAL_VIEWS.rearSeats;
+      else if (hasAny(['cargo','trunk'])) view = CANONICAL_VIEWS.cargoArea;
+      else view = CANONICAL_VIEWS.interiorCabin;
+    }
+
+    // Environment (only when unmistakable in filename)
+    for (const key of Object.keys(ENVIRONMENT_PHRASES)) {
+      if (tokenSet.has(key)) { environment = ENVIRONMENT_PHRASES[key]; break; }
+    }
+
+    return { isInterior, isDetail, isUI, view, part, environment };
+  };
+
+  // ===================== IMAGE FALLBACK (very conservative) =====================
+
+  const analyzeImageFallback = (imageUrl) => {
     return new Promise((resolve) => {
-      // First: Strong filename pattern matching
-      const lower = filename.toLowerCase();
-      
-      // Interior keywords (highest priority)
-      if (lower.match(/interior|dashboard|cabin|steering|gear|shift|console|seat/i)) {
-        resolve('interior dashboard view');
-        return;
-      }
-      
-      // Explicit angle keywords
-      if (lower.match(/rear|back/i)) {
-        resolve('rear three-quarter view');
-        return;
-      }
-      if (lower.match(/side|profile/i)) {
-        resolve('side profile view');
-        return;
-      }
-      if (lower.match(/front|grille|headlight/i)) {
-        resolve('front three-quarter view');
-        return;
-      }
-      
-      // If no filename clues, analyze the image
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      
       img.onload = () => {
         try {
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
-          
-          // Resize for faster processing
-          const maxDim = 200;
+          const maxDim = 160;
           const scale = Math.min(maxDim / img.width, maxDim / img.height);
-          canvas.width = img.width * scale;
-          canvas.height = img.height * scale;
+          canvas.width = Math.max(1, Math.floor(img.width * scale));
+          canvas.height = Math.max(1, Math.floor(img.height * scale));
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const data = imageData.data;
-          
-          // Analyze image characteristics
-          const width = canvas.width;
-          const height = canvas.height;
-          
-          // Sample key regions
-          let topBrightness = 0;
-          let bottomBrightness = 0;
-          let darkPixelCount = 0;
-          let brightPixelCount = 0;
-          let totalPixels = 0;
-          
-          // Color variance indicators
-          let hasBlue = 0; // Sky indicator
-          let hasGray = 0; // Pavement/interior indicator
-          
+
+          const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          let blueCount = 0, darkCount = 0, grayCount = 0, total = width * height;
+          let topBrightness = 0, bottomBrightness = 0;
+
           for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
               const i = (y * width + x) * 4;
-              const r = data[i];
-              const g = data[i + 1];
-              const b = data[i + 2];
-              const brightness = (r + g + b) / 3;
-              
-              totalPixels++;
-              
-              // Check for sky-like blue
-              if (b > 100 && b > r + 20 && b > g + 20) {
-                hasBlue++;
-              }
-              
-              // Check for gray tones (common in interiors and pavement)
-              if (Math.abs(r - g) < 30 && Math.abs(g - b) < 30 && Math.abs(r - b) < 30) {
-                hasGray++;
-              }
-              
-              if (brightness < 60) {
-                darkPixelCount++;
-              } else if (brightness > 180) {
-                brightPixelCount++;
-              }
-              
-              // Top third vs bottom third brightness
-              if (y < height / 3) {
-                topBrightness += brightness;
-              } else if (y > height * 2 / 3) {
-                bottomBrightness += brightness;
-              }
+              const r = data[i], g = data[i+1], b = data[i+2];
+              const bright = (r + g + b) / 3;
+              if (b > 100 && b > r + 25 && b > g + 25) blueCount++;
+              if (Math.abs(r - g) < 18 && Math.abs(g - b) < 18 && Math.abs(r - b) < 18) grayCount++;
+              if (bright < 55) darkCount++;
+              if (y < height/3) topBrightness += bright;
+              if (y > height*2/3) bottomBrightness += bright;
             }
           }
-          
-          const darkRatio = darkPixelCount / totalPixels;
-          const brightRatio = brightPixelCount / totalPixels;
-          const blueRatio = hasBlue / totalPixels;
-          const topAvg = topBrightness / (width * height / 3);
-          const bottomAvg = bottomBrightness / (width * height / 3);
-          
-          // Decision logic
-          // Interior: Dark overall, no sky blue, lots of gray tones
-          if (darkRatio > 0.4 && blueRatio < 0.05 && bottomAvg < 100) {
-            resolve('interior dashboard view');
+
+          const blueRatio = blueCount / total;
+          const darkRatio = darkCount / total;
+          const grayRatio = grayCount / total;
+          const topAvg = topBrightness / (width * Math.floor(height/3));
+          const bottomAvg = bottomBrightness / (width * Math.floor(height/3));
+          const wide = width >= height * 1.15;
+
+          // Night exterior cue: very dark overall, not much blue sky
+          if (darkRatio > 0.45 && blueRatio < 0.08 && wide) {
+            return resolve({ view: CANONICAL_VIEWS.frontThreeQuarter, environment: 'at night' });
           }
-          // Exterior with sky: Bright top, blue present
-          else if (topAvg > 120 && blueRatio > 0.1) {
-            resolve('front three-quarter view');
+
+          // Day exterior cue: bright top with blue sky
+          if (blueRatio > 0.12 && topAvg > bottomAvg + 25) {
+            return resolve({ view: CANONICAL_VIEWS.frontThreeQuarter, environment: null });
           }
-          // Exterior at night or in tunnel: dark but wider frame
-          else if (darkRatio > 0.5 && canvas.width > canvas.height * 1.2) {
-            resolve('exterior view');
+
+          // Interior cue: dark-ish + lots of gray tones
+          if (darkRatio > 0.35 && grayRatio > 0.35) {
+            return resolve({ view: CANONICAL_VIEWS.interiorCabin, environment: null });
           }
+
           // Default exterior
-          else {
-            resolve('front three-quarter view');
-          }
-          
-        } catch (error) {
-          console.error('Image analysis error:', error);
-          resolve('exterior view');
+          return resolve({ view: CANONICAL_VIEWS.frontThreeQuarter, environment: null });
+        } catch {
+          return resolve({ view: CANONICAL_VIEWS.exterior, environment: null });
         }
       };
-      
-      img.onerror = () => {
-        // Fallback if image won't load
-        resolve('exterior view');
-      };
-      
+      img.onerror = () => resolve({ view: CANONICAL_VIEWS.exterior, environment: null });
       img.src = imageUrl;
     });
   };
+
+  // ===================== ALT BUILDER (AIO v2.5) =====================
+
+  const buildAltFromMetadata = (meta) => {
+    const { year, make, model, trim, color } = vehicleInfo;
+
+    const capitalizedMake = capitalize(make);
+    const formattedModel = formatModelName(model, make);
+    const capitalizedTrim = trim ? capitalize(trim) : '';
+    const colorText = color ? color : '';
+
+    const subjectParts = [
+      year || '',
+      capitalizedMake || '',
+      formattedModel || '',
+      capitalizedTrim || '',
+      colorText ? `in ${colorText}` : ''
+    ].filter(Boolean);
+
+    const subject = subjectParts.join(' ').replace(/\s{2,}/g, ' ').trim();
+
+    let descriptor = '';
+    if (meta.isUI && meta.part) {
+      descriptor = meta.part;
+    } else if (meta.isDetail && meta.part) {
+      descriptor = meta.part;
+    } else if (meta.view) {
+      descriptor = meta.view;
+    } else {
+      descriptor = CANONICAL_VIEWS.frontThreeQuarter;
+    }
+
+    const env = meta.environment ? meta.environment : '';
+    let alt = [subject, descriptor, env].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+
+    // Length control ≤125: drop env -> color -> trim
+    const clamp = (s, max = 125) => (s.length <= max ? s : s.slice(0, max).trim());
+
+    if (alt.length > 125 && env) {
+      alt = alt.replace(new RegExp(`\\s+${escapeRegExp(env)}$`), '').trim();
+    }
+    if (alt.length > 125 && colorText) {
+      alt = alt.replace(new RegExp(`\\s+in\\s+${escapeRegExp(colorText)}\\b`, 'i'), '').trim();
+    }
+    if (alt.length > 125 && capitalizedTrim) {
+      alt = alt.replace(new RegExp(`\\s+${escapeRegExp(capitalizedTrim)}\\b`), '').trim();
+    }
+
+    return clamp(alt, 125);
+  };
+
+  // ===================== ZIP PROCESSING =====================
 
   const areImagesSimilar = (name1, name2) => {
     const clean1 = name1.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
@@ -227,34 +337,46 @@ export default function AltTextGenerator() {
         const isDuplicate = Array.from(processedNames).some(name => 
           areImagesSimilar(name, filename)
         );
+        if (isDuplicate) continue;
 
-        if (!isDuplicate) {
-          const blob = await zipEntry.async('blob');
-          const url = URL.createObjectURL(blob);
-          
-          // Detect angle from actual image content
-          const angle = await detectAngleFromImage(url, filename);
-          
-          imageFiles.push({
-            id: Date.now() + Math.random(),
-            filename,
-            url,
-            angle,
-            blob
-          });
-          
-          processedNames.add(filename);
+        const blob = await zipEntry.async('blob');
+        const url = URL.createObjectURL(blob);
+
+        // 1) Filename metadata (primary)
+        let meta = parseFilenameMetadata(filename);
+
+        // 2) If ambiguous, use conservative image fallback
+        if (!meta.view && !meta.part) {
+          const fallback = await analyzeImageFallback(url);
+          meta = { ...meta, ...fallback };
         }
+
+        // 3) Build compliant alt
+        const alt = buildAltFromMetadata(meta);
+
+        imageFiles.push({
+          id: Date.now() + Math.random(),
+          filename,
+          url,
+          blob,
+          meta,
+          alt,
+        });
+
+        processedNames.add(filename);
       }
 
       setImages(imageFiles);
       setShowResults(true);
       setProcessing(false);
     } catch (error) {
+      console.error(error);
       alert('Error processing ZIP file. Please try again.');
       setProcessing(false);
     }
   };
+
+  // ===================== UI ACTIONS =====================
 
   const handleZipUpload = async (event) => {
     const file = event.target.files[0];
@@ -285,19 +407,7 @@ export default function AltTextGenerator() {
     }
   };
 
-  const generateAltText = (angle) => {
-    const { year, make, model, trim, color } = vehicleInfo;
-    
-    const capitalizedMake = capitalize(make);
-    const formattedModel = formatModelName(model, make);
-    const capitalizedTrim = trim ? capitalize(trim) : '';
-    
-    let altText = `${year} ${capitalizedMake} ${formattedModel}`;
-    if (trim) altText += ` ${capitalizedTrim}`;
-    if (color) altText += ` in ${color}`;
-    altText += `, ${angle}`;
-    return altText;
-  };
+  const generateAltText = (img) => img.alt;
 
   const copyToClipboard = (text, index) => {
     navigator.clipboard.writeText(text);
@@ -314,7 +424,7 @@ export default function AltTextGenerator() {
     yPosition += 10;
 
     doc.setFontSize(12);
-    const vehicleText = `${vehicleInfo.year} ${capitalize(vehicleInfo.make)} ${formatModelName(vehicleInfo.model, vehicleInfo.make)} ${vehicleInfo.trim ? capitalize(vehicleInfo.trim) : ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`;
+    const vehicleText = `${vehicleInfo.year} ${capitalize(vehicleInfo.make)} ${formatModelName(vehicleInfo.model, vehicleInfo.make)} ${vehicleInfo.trim ? capitalize(vehicleInfo.trim) : ''} ${vehicleInfo.color ? 'in ' + vehicleInfo.color : ''}`.replace(/\s{2,}/g, ' ').trim();
     doc.text(vehicleText, 20, yPosition);
     yPosition += 15;
 
@@ -326,7 +436,7 @@ export default function AltTextGenerator() {
         yPosition = 20;
       }
 
-      const altText = generateAltText(img.angle);
+      const altText = generateAltText(img);
       
       try {
         const imgData = await new Promise((resolve) => {
@@ -335,7 +445,8 @@ export default function AltTextGenerator() {
           reader.readAsDataURL(img.blob);
         });
 
-        doc.addImage(imgData, 'JPEG', 20, yPosition, 60, 40);
+        const isPng = img.filename.toLowerCase().endsWith('.png');
+        doc.addImage(imgData, isPng ? 'PNG' : 'JPEG', 20, yPosition, 60, 40);
         
         doc.setFontSize(10);
         const splitText = doc.splitTextToSize(altText, 100);
@@ -360,6 +471,33 @@ export default function AltTextGenerator() {
       trim: '',
       color: ''
     });
+  };
+
+  // ===================== AUTH & RENDER =====================
+
+  useEffect(() => {
+    const loggedIn = sessionStorage.getItem('authenticated');
+    if (loggedIn === 'true') {
+      setIsAuthenticated(true);
+    }
+  }, []);
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (passwordInput === CORRECT_PASSWORD) {
+      setIsAuthenticated(true);
+      sessionStorage.setItem('authenticated', 'true');
+      setPasswordError('');
+    } else {
+      setPasswordError('Incorrect password. Please try again.');
+      setPasswordInput('');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    sessionStorage.removeItem('authenticated');
+    setPasswordInput('');
   };
 
   if (!isAuthenticated) {
@@ -430,10 +568,10 @@ export default function AltTextGenerator() {
 
           <div style={styles.imageList}>
             {images.map((img, index) => {
-              const altText = generateAltText(img.angle);
+              const altText = generateAltText(img);
               return (
                 <div key={img.id} style={styles.imageCard}>
-                  <img src={img.url} alt="Vehicle preview" style={styles.thumbnail} />
+                  <img src={img.url} alt={altText} style={styles.thumbnail} />
                   <div style={styles.altTextContainer}>
                     <label style={styles.label}>Alt Text</label>
                     <div style={styles.textBoxWrapper}>
@@ -446,7 +584,9 @@ export default function AltTextGenerator() {
                         {copiedIndex === index ? '✓' : '📋'}
                       </button>
                     </div>
-                    <p style={styles.charCount}>{altText.length} characters</p>
+                    <p style={{...styles.charCount, color: altText.length > 125 ? '#ef4444' : '#6b7280'}}>
+                      {altText.length} characters
+                    </p>
                   </div>
                 </div>
               );
@@ -830,6 +970,7 @@ const styles = {
     color: '#111827',
     userSelect: 'text',
     cursor: 'text',
+    wordBreak: 'break-word',
   },
   copyButton: {
     position: 'absolute',
