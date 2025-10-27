@@ -26,7 +26,7 @@ export default function AltTextGenerator() {
   const [processing, setProcessing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
-  const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
+  const ACURA_UPPERCASE_MODELS = ['MDX', 'RDX', 'TLX', 'ILX', 'NSX', 'ZDX', 'ADX', 'RLX', 'TSX', 'RSX'];
 
   // ---- Helpers ----
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
@@ -54,9 +54,16 @@ export default function AltTextGenerator() {
     return parts;
   };
 
-  const buildAlt = (descriptor) => {
+  const buildAlt = (descriptor, breakpoint) => {
     const base = subject();
-    const parts = [base, descriptor].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+    const breakpointLabels = {
+      's': 'on mobile view', 'small': 'on mobile view',
+      'm': 'on tablet view', 'medium': 'on tablet view',
+      'l': 'on desktop view', 'large': 'on desktop view',
+      'xl': 'on large screen view', 'xlarge': 'on large screen view',
+    };
+    const bpLabel = breakpoint ? breakpointLabels[breakpoint] || '' : '';
+    const parts = [base, descriptor, bpLabel].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
     return clamp(parts);
   };
 
@@ -86,7 +93,6 @@ export default function AltTextGenerator() {
 
           const total = w * h;
 
-          // Stats
           let dark = 0, bright = 0, gray = 0, satSum = 0;
           let edge = 0;
           const lum = new Float32Array(total);
@@ -171,7 +177,7 @@ export default function AltTextGenerator() {
                   samples++;
                   const e = Math.abs(
                     lum[yy * w + xx] -
-                      (lum[yy * w + (xx + 1)] + lum[(yy + 1) * w + xx]) / 2
+                    (lum[yy * w + (xx + 1)] + lum[(yy + 1) * w + xx]) / 2
                   );
                   if (e > 25) hits++;
                 }
@@ -390,23 +396,43 @@ export default function AltTextGenerator() {
     const zip = new JSZip();
     try {
       const contents = await zip.loadAsync(file);
+      const imageGroups = {};
+
+      // Recursively process all files, including subfolders
+      const processFolder = async (folder) => {
+        for (const [filename, entry] of Object.entries(folder.files)) {
+          if (entry.dir) {
+            await processFolder(entry); // Recurse into subfolders
+          } else {
+            const ext = filename.split('.').pop().toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(ext)) {
+              const baseName = filename.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
+              if (!imageGroups[baseName]) imageGroups[baseName] = [];
+              const blob = await entry.async('blob');
+              const url = URL.createObjectURL(blob);
+              imageGroups[baseName].push({ filename, blob, url });
+            }
+          }
+        }
+      };
+      await processFolder(contents);
+
       const out = [];
-      const seen = new Set();
+      for (const baseName in imageGroups) {
+        const group = imageGroups[baseName];
+        if (group.length > 0) {
+          // Analyze the first image as the representative for the base descriptor
+          const { url: repUrl } = group[0];
+          const { descriptor } = await analyzeImage(repUrl);
 
-      for (const [filename, entry] of Object.entries(contents.files)) {
-        if (entry.dir) continue;
-        const ext = filename.split('.').pop().toLowerCase();
-        if (!['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(ext)) continue;
-        if (Array.from(seen).some((n) => areImagesSimilar(n, filename))) continue;
-
-        const blob = await entry.async('blob');
-        const url = URL.createObjectURL(blob);
-
-        const { descriptor } = await analyzeImage(url); // filename ignored
-        const alt = buildAlt(descriptor);
-
-        out.push({ id: Date.now() + Math.random(), filename, url, alt, blob });
-        seen.add(filename);
+          // Assign breakpoint-specific alt text to each image in the group
+          group.forEach(({ filename, blob, url }) => {
+            const breakpointMatch = filename.match(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)/i);
+            const breakpoint = breakpointMatch ? breakpointMatch[1] : null;
+            const alt = buildAlt(descriptor, breakpoint);
+            out.push({ id: Date.now() + Math.random(), filename, url, alt, blob });
+          });
+        }
       }
 
       setImages(out);
