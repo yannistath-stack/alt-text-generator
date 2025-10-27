@@ -72,6 +72,30 @@ export default function AltTextGenerator() {
 
   const detectAngleFromImage = async (imageUrl, filename) => {
     return new Promise((resolve) => {
+      // First: Strong filename pattern matching
+      const lower = filename.toLowerCase();
+      
+      // Interior keywords (highest priority)
+      if (lower.match(/interior|dashboard|cabin|steering|gear|shift|console|seat/i)) {
+        resolve('interior dashboard view');
+        return;
+      }
+      
+      // Explicit angle keywords
+      if (lower.match(/rear|back/i)) {
+        resolve('rear three-quarter view');
+        return;
+      }
+      if (lower.match(/side|profile/i)) {
+        resolve('side profile view');
+        return;
+      }
+      if (lower.match(/front|grille|headlight/i)) {
+        resolve('front three-quarter view');
+        return;
+      }
+      
+      // If no filename clues, analyze the image
       const img = new Image();
       img.crossOrigin = 'anonymous';
       
@@ -79,89 +103,100 @@ export default function AltTextGenerator() {
         try {
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
+          
+          // Resize for faster processing
+          const maxDim = 200;
+          const scale = Math.min(maxDim / img.width, maxDim / img.height);
+          canvas.width = img.width * scale;
+          canvas.height = img.height * scale;
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imageData.data;
           
-          // Analyze image regions
-          const centerX = Math.floor(canvas.width / 2);
-          const topThird = Math.floor(canvas.height / 3);
-          const bottomThird = Math.floor(canvas.height * 2 / 3);
+          // Analyze image characteristics
+          const width = canvas.width;
+          const height = canvas.height;
           
-          let darkPixels = 0;
+          // Sample key regions
+          let topBrightness = 0;
+          let bottomBrightness = 0;
+          let darkPixelCount = 0;
+          let brightPixelCount = 0;
           let totalPixels = 0;
-          let leftBrightness = 0;
-          let rightBrightness = 0;
-          let centerBrightness = 0;
           
-          // Sample pixels
-          for (let y = 0; y < canvas.height; y += 10) {
-            for (let x = 0; x < canvas.width; x += 10) {
-              const i = (y * canvas.width + x) * 4;
-              const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          // Color variance indicators
+          let hasBlue = 0; // Sky indicator
+          let hasGray = 0; // Pavement/interior indicator
+          
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const i = (y * width + x) * 4;
+              const r = data[i];
+              const g = data[i + 1];
+              const b = data[i + 2];
+              const brightness = (r + g + b) / 3;
               
               totalPixels++;
-              if (brightness < 50) darkPixels++;
               
-              if (x < canvas.width / 3) leftBrightness += brightness;
-              else if (x > canvas.width * 2 / 3) rightBrightness += brightness;
-              else centerBrightness += brightness;
+              // Check for sky-like blue
+              if (b > 100 && b > r + 20 && b > g + 20) {
+                hasBlue++;
+              }
+              
+              // Check for gray tones (common in interiors and pavement)
+              if (Math.abs(r - g) < 30 && Math.abs(g - b) < 30 && Math.abs(r - b) < 30) {
+                hasGray++;
+              }
+              
+              if (brightness < 60) {
+                darkPixelCount++;
+              } else if (brightness > 180) {
+                brightPixelCount++;
+              }
+              
+              // Top third vs bottom third brightness
+              if (y < height / 3) {
+                topBrightness += brightness;
+              } else if (y > height * 2 / 3) {
+                bottomBrightness += brightness;
+              }
             }
           }
           
-          const darkRatio = darkPixels / totalPixels;
-          const avgLeft = leftBrightness / (totalPixels / 3);
-          const avgRight = rightBrightness / (totalPixels / 3);
-          const avgCenter = centerBrightness / (totalPixels / 3);
+          const darkRatio = darkPixelCount / totalPixels;
+          const brightRatio = brightPixelCount / totalPixels;
+          const blueRatio = hasBlue / totalPixels;
+          const topAvg = topBrightness / (width * height / 3);
+          const bottomAvg = bottomBrightness / (width * height / 3);
           
-          // Check filename first for explicit clues
-          const lower = filename.toLowerCase();
-          if (lower.includes('interior') || lower.includes('dashboard') || lower.includes('cabin')) {
+          // Decision logic
+          // Interior: Dark overall, no sky blue, lots of gray tones
+          if (darkRatio > 0.4 && blueRatio < 0.05 && bottomAvg < 100) {
             resolve('interior dashboard view');
-            return;
           }
-          if (lower.includes('rear') || lower.includes('back')) {
-            resolve('rear three-quarter view');
-            return;
-          }
-          if (lower.includes('side') || lower.includes('profile')) {
-            resolve('side profile view');
-            return;
-          }
-          if (lower.includes('front')) {
+          // Exterior with sky: Bright top, blue present
+          else if (topAvg > 120 && blueRatio > 0.1) {
             resolve('front three-quarter view');
-            return;
           }
-          
-          // Use image analysis
-          if (darkRatio > 0.6) {
-            resolve('interior dashboard view');
-          } else if (Math.abs(avgLeft - avgRight) > 30) {
-            resolve('side profile view');
-          } else if (avgCenter > avgLeft && avgCenter > avgRight) {
-            resolve('front three-quarter view');
-          } else {
+          // Exterior at night or in tunnel: dark but wider frame
+          else if (darkRatio > 0.5 && canvas.width > canvas.height * 1.2) {
             resolve('exterior view');
           }
+          // Default exterior
+          else {
+            resolve('front three-quarter view');
+          }
+          
         } catch (error) {
-          // Fallback to filename-based detection
-          const lower = filename.toLowerCase();
-          if (lower.includes('interior')) resolve('interior dashboard view');
-          else if (lower.includes('rear')) resolve('rear three-quarter view');
-          else if (lower.includes('side')) resolve('side profile view');
-          else resolve('front three-quarter view');
+          console.error('Image analysis error:', error);
+          resolve('exterior view');
         }
       };
       
       img.onerror = () => {
-        const lower = filename.toLowerCase();
-        if (lower.includes('interior')) resolve('interior dashboard view');
-        else if (lower.includes('rear')) resolve('rear three-quarter view');
-        else if (lower.includes('side')) resolve('side profile view');
-        else resolve('exterior view');
+        // Fallback if image won't load
+        resolve('exterior view');
       };
       
       img.src = imageUrl;
@@ -465,7 +500,7 @@ export default function AltTextGenerator() {
                 type="text"
                 value={vehicleInfo.model}
                 onChange={(e) => setVehicleInfo({...vehicleInfo, model: e.target.value})}
-                placeholder="ADX"
+                placeholder="MDX"
                 style={styles.input}
               />
             </div>
