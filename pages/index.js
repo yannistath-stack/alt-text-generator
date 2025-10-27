@@ -60,7 +60,7 @@ export default function AltTextGenerator() {
     return clamp(parts);
   };
 
-  // ---------- Vision Heuristics (enhanced for individual analysis) ----------
+  // ---------- Vision Heuristics (refined with fallback) ----------
   const analyzeImage = (url) =>
     new Promise((resolve) => {
       const img = new Image();
@@ -98,8 +98,8 @@ export default function AltTextGenerator() {
               lum[y * w + x] = L;
 
               const bri = (r + g + b) / 3;
-              if (bri < 55) dark++;
-              if (bri > 200) { bright++; brPts.push({ x, y, bri }); }
+              if (bri < 50) dark++;
+              if (bri > 205) { bright++; brPts.push({ x, y, bri }); }
               colBright[x] += bri;
               rowBright[y] += bri;
 
@@ -107,7 +107,7 @@ export default function AltTextGenerator() {
               const sat = max === 0 ? 0 : (max - min) / max;
               satSum += sat;
 
-              if (Math.abs(r - g) < 12 && Math.abs(g - b) < 12) gray++;
+              if (Math.abs(r - g) < 10 && Math.abs(g - b) < 10) gray++;
             }
           }
 
@@ -137,10 +137,10 @@ export default function AltTextGenerator() {
           const botThird = rowBright.slice(Math.floor((2 * h) / 3)).reduce((a, v) => a + v, 0);
 
           const interiorScore =
-            (darkR > 0.30 ? 1 : 0) +
-            (avgSat < 0.22 ? 1 : 0) +
-            (edgeD > 22 ? 1 : 0) +
-            (grayR > 0.28 ? 1 : 0);
+            (darkR > 0.35 ? 1 : 0) +
+            (avgSat < 0.20 ? 1 : 0) +
+            (edgeD > 20 ? 1 : 0) +
+            (grayR > 0.25 ? 1 : 0);
 
           const isInterior = interiorScore >= 2;
 
@@ -167,7 +167,7 @@ export default function AltTextGenerator() {
                     lum[yy * w + xx] -
                     (lum[yy * w + (xx + 1)] + lum[(yy + 1) * w + xx]) / 2
                   );
-                  if (e > 25) hits++;
+                  if (e > 20) hits++;
                 }
               }
             }
@@ -177,78 +177,78 @@ export default function AltTextGenerator() {
           // ---------- INTERIOR ----------
           if (isInterior) {
             const { cx, cy, spread, vx, vy } = brightCentroid;
-            const centerish = cx > w * 0.33 && cx < w * 0.67 && cy > h * 0.35 && cy < h * 0.75;
-            const lowCenter = centerish && cy > h * 0.45;
-            const sideish = cx < w * 0.25 || cx > w * 0.75;
+            const centerish = cx > w * 0.30 && cx < w * 0.70 && cy > h * 0.40 && cy < h * 0.80;
+            const lowCenter = centerish && cy > h * 0.50;
+            const sideish = cx < w * 0.20 || cx > w * 0.80;
 
-            if (brPts.length > total * 0.010 && lowCenter && spread < Math.min(w, h) * 0.15) {
+            if (brPts.length > total * 0.012 && lowCenter && spread < Math.min(w, h) * 0.12) {
               return resolve({ descriptor: 'gear shifter close-up' });
             }
             if (
-              brPts.length > total * 0.007 &&
+              brPts.length > total * 0.008 &&
               sideish &&
-              vy > vx * 1.3 &&
-              cy > h * 0.25 && cy < h * 0.7
+              vy > vx * 1.5 &&
+              cy > h * 0.30 && cy < h * 0.65
             ) {
               return resolve({ descriptor: 'paddle shifter detail' });
             }
 
-            const wheelRing = ringScore(w / 2, h / 2, Math.min(w, h) * 0.20, Math.min(w, h) * 0.35);
-            if (wheelRing > 0.10) {
+            const wheelRing = ringScore(w / 2, h / 2, Math.min(w, h) * 0.18, Math.min(w, h) * 0.32);
+            if (wheelRing > 0.12) {
               return resolve({ descriptor: 'steering wheel detail' });
             }
 
             const midRectBright = midThird / (w * (h / 3) * 255);
-            if (midRectBright > 0.60 && avgSat < 0.20) {
+            if (midRectBright > 0.65 && avgSat < 0.18) {
               return resolve({ descriptor: 'infotainment screen display' });
             }
 
             const upperBright = topThird / (w * (h / 3) * 255);
-            if (upperBright > 0.55 && brPts.length > total * 0.007 && cy < h * 0.40) {
+            if (upperBright > 0.60 && brPts.length > total * 0.008 && cy < h * 0.35) {
               let leftPeak = 0, rightPeak = 0;
               for (let x = 0; x < w; x++) {
                 if (x < w / 2) leftPeak = Math.max(leftPeak, colBright[x]);
                 else rightPeak = Math.max(rightPeak, colBright[x]);
               }
-              if ((leftPeak > 0 && rightPeak > 0) && Math.abs(leftPeak - rightPeak) > 10) {
+              if ((leftPeak > 0 && rightPeak > 0) && Math.abs(leftPeak - rightPeak) > 15) {
                 return resolve({ descriptor: 'instrument cluster view' });
               }
             }
 
-            if (botThird > midThird * 1.10 && edgeD > 28) {
+            if (botThird > midThird * 1.15 && edgeD > 30) {
               return resolve({ descriptor: 'climate control panel' });
             }
-            if (edgeD > 25 && cy > h * 0.50) {
+            if (edgeD > 26 && cy > h * 0.55) {
               return resolve({ descriptor: 'center console interior' });
             }
-            if (edgeD > 24 && avgSat > 0.30) {
+            if (edgeD > 25 && avgSat > 0.35) {
               return resolve({ descriptor: 'seat stitching detail' });
             }
-            if (topThird < midThird && midThird > botThird && upperBright < 0.40) {
+            if (topThird < midThird && midThird > botThird && upperBright < 0.35) {
               return resolve({ descriptor: 'dashboard interior' });
             }
             return resolve({ descriptor: 'vehicle interior detail' });
           }
 
           // ---------- EXTERIOR ----------
-          const wide = w >= h * 1.20;
+          const wide = w >= h * 1.25;
           const leftSum = colBright.slice(0, Math.floor(w / 2)).reduce((a, v) => a + v, 0);
           const rightSum = colBright.slice(Math.floor(w / 2)).reduce((a, v) => a + v, 0);
           const sideDiff = Math.abs(leftSum - rightSum) / (total * 255);
-          const topViewLikely = topThird > botThird * 1.20;
+          const topViewLikely = topThird > botThird * 1.25;
 
           // wheel / brake caliper
           const corners = [
-            { x: w * 0.20, y: h * 0.75 },
-            { x: w * 0.80, y: h * 0.75 },
-            { x: w * 0.20, y: h * 0.25 },
-            { x: w * 0.80, y: h * 0.25 },
+            { x: w * 0.15, y: h * 0.70 },
+            { x: w * 0.85, y: h * 0.70 },
+            { x: w * 0.15, y: h * 0.30 },
+            { x: w * 0.85, y: h * 0.30 },
           ];
           for (const k of corners) {
-            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.08, Math.min(w, h) * 0.18);
-            if (rs > 0.14) {
-              const nearWheelBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.25).length;
-              if (nearWheelBright > total * 0.005 && avgSat > 0.30) {
+            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.06, Math.min(w, h) * 0.15);
+            if (rs > 0.15) {
+              const nearWheelBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.20).length;
+              if (nearWheelBright > total * 0.006 && avgSat > 0.25) {
                 return resolve({ descriptor: 'brake caliper close-up' });
               }
               return resolve({ descriptor: 'alloy wheel design' });
@@ -257,33 +257,33 @@ export default function AltTextGenerator() {
 
           // headlights hint (twin lower)
           const cols = new Array(w).fill(0);
-          brPts.forEach((p) => { if (p.y > h * 0.50) cols[p.x]++; });
+          brPts.forEach((p) => { if (p.y > h * 0.55) cols[p.x]++; });
           let L = { x: 0, v: 0 }, R = { x: 0, v: 0 };
           cols.forEach((v, x) => {
             if (x < w / 2 && v > L.v) L = { x, v };
             if (x >= w / 2 && v > R.v) R = { x, v };
           });
-          const twin = L.v > brPts.length * 0.025 && R.v > brPts.length * 0.025 && Math.abs(L.x - R.x) > w * 0.30;
+          const twin = L.v > brPts.length * 0.030 && R.v > brPts.length * 0.030 && Math.abs(L.x - R.x) > w * 0.20;
 
           // grille & emblem logic
           let grilleLike = false;
           let centerVert = 0;
-          for (let x = Math.floor(w * 0.35); x < Math.floor(w * 0.65); x++) centerVert += colBright[x];
-          if (centerVert / (w * h) > 35 && edgeD > 28 && !topViewLikely) {
+          for (let x = Math.floor(w * 0.40); x < Math.floor(w * 0.60); x++) centerVert += colBright[x];
+          if (centerVert / (w * h) > 40 && edgeD > 25 && !topViewLikely) {
             grilleLike = true;
           }
           const compactBadge =
-            brPts.length > total * 0.007 &&
-            brightCentroid.spread < Math.min(w, h) * 0.10 &&
-            brightCentroid.cy > h * 0.40 &&
-            brightCentroid.cx > w * 0.35 &&
-            brightCentroid.cx < w * 0.65;
+            brPts.length > total * 0.008 &&
+            brightCentroid.spread < Math.min(w, h) * 0.08 &&
+            brightCentroid.cy > h * 0.45 &&
+            brightCentroid.cx > w * 0.40 &&
+            brightCentroid.cx < w * 0.60;
 
           if (grilleLike && compactBadge) {
             return resolve({ descriptor: 'grille with emblem logo' });
           }
           if (grilleLike) {
-            if (twin || (brightR > 0.10 && wide)) return resolve({ descriptor: 'front grille view' });
+            if (twin || (brightR > 0.12 && wide)) return resolve({ descriptor: 'front grille view' });
             return resolve({ descriptor: 'grille design' });
           }
           if (compactBadge) {
@@ -293,44 +293,44 @@ export default function AltTextGenerator() {
           // door handle
           const doorHandle = brPts.some(
             (p) =>
-              (p.x < w * 0.15 || p.x > w * 0.85) &&
-              p.y > h * 0.30 && p.y < h * 0.65
+              (p.x < w * 0.10 || p.x > w * 0.90) &&
+              p.y > h * 0.25 && p.y < h * 0.60
           );
-          if (doorHandle && sideDiff > 0.04) {
+          if (doorHandle && sideDiff > 0.05) {
             return resolve({ descriptor: 'door handle feature' });
           }
 
           // side mirror
-          if (brPts.length > total * 0.005) {
+          if (brPts.length > total * 0.006) {
             const sideMirror = brPts.some(
-              (p) => (p.x < w * 0.10 || p.x > w * 0.90) && p.y > h * 0.25 && p.y < h * 0.75
+              (p) => (p.x < w * 0.05 || p.x > w * 0.95) && p.y > h * 0.20 && p.y < h * 0.70
             );
             if (sideMirror) return resolve({ descriptor: 'side mirror view' });
           }
 
           // spoiler
-          const topBand = rowBright.slice(0, Math.max(2, Math.floor(h * 0.05))).reduce((a, v) => a + v, 0);
-          if (topBand > midThird * 0.30 && edgeD > 24 && !topViewLikely) {
+          const topBand = rowBright.slice(0, Math.max(2, Math.floor(h * 0.04))).reduce((a, v) => a + v, 0);
+          if (topBand > midThird * 0.35 && edgeD > 22 && !topViewLikely) {
             return resolve({ descriptor: 'rear spoiler design' });
           }
 
           // sunroof
-          if (topThird < midThird * 0.75 && topThird < botThird * 0.75 && grayR > 0.30) {
+          if (topThird < midThird * 0.70 && topThird < botThird * 0.70 && grayR > 0.35) {
             return resolve({ descriptor: 'sunroof panel' });
           }
 
           // fog light
-          const lowLeftBright = brPts.filter(p => p.x < w * 0.20 && p.y > h * 0.80).length;
-          const lowRightBright = brPts.filter(p => p.x > w * 0.80 && p.y > h * 0.80).length;
-          if ((lowLeftBright + lowRightBright) > total * 0.004 && (twin || (brightR > 0.10 && wide))) {
+          const lowLeftBright = brPts.filter(p => p.x < w * 0.15 && p.y > h * 0.75).length;
+          const lowRightBright = brPts.filter(p => p.x > w * 0.85 && p.y > h * 0.75).length;
+          if ((lowLeftBright + lowRightBright) > total * 0.005 && (twin || (brightR > 0.12 && wide))) {
             return resolve({ descriptor: 'fog light illumination' });
           }
 
           // headlight/taillight
-          const leftLowerBright = brPts.filter(p => p.x < w * 0.25 && p.y > h * 0.60).length;
-          const rightLowerBright = brPts.filter(p => p.x > w * 0.75 && p.y > h * 0.60).length;
-          if (leftLowerBright + rightLowerBright > total * 0.005) {
-            if (twin || (brightR > 0.10 && wide)) {
+          const leftLowerBright = brPts.filter(p => p.x < w * 0.20 && p.y > h * 0.55).length;
+          const rightLowerBright = brPts.filter(p => p.x > w * 0.80 && p.y > h * 0.55).length;
+          if (leftLowerBright + rightLowerBright > total * 0.006) {
+            if (twin || (brightR > 0.12 && wide)) {
               return resolve({ descriptor: 'headlight design' });
             } else {
               return resolve({ descriptor: 'taillight design' });
@@ -340,41 +340,41 @@ export default function AltTextGenerator() {
           // rear diffuser
           const bottomBandEdges = (() => {
             let e = 0, cnt = 0;
-            for (let y = Math.floor(h * 0.80); y < h - 1; y++) {
-              for (let x = Math.floor(w * 0.30); x < Math.floor(w * 0.70); x++) {
+            for (let y = Math.floor(h * 0.75); y < h - 1; y++) {
+              for (let x = Math.floor(w * 0.35); x < Math.floor(w * 0.65); x++) {
                 e += Math.abs(lum[y * w + x] - lum[y * w + (x + 1)]);
                 cnt++;
               }
             }
             return cnt ? e / cnt : 0;
           })();
-          if (bottomBandEdges > 20 && botThird < midThird * 0.90 && !topViewLikely) {
+          if (bottomBandEdges > 15 && botThird < midThird * 0.85 && !topViewLikely) {
             return resolve({ descriptor: 'rear diffuser component' });
           }
 
           // exhaust tip
           const exCorners = [
-            { x: w * 0.10, y: h * 0.85 },
-            { x: w * 0.90, y: h * 0.85 },
+            { x: w * 0.10, y: h * 0.80 },
+            { x: w * 0.90, y: h * 0.80 },
           ];
           for (const k of exCorners) {
-            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.03, Math.min(w, h) * 0.08);
-            const localBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.10).length;
-            if (rs > 0.12 && localBright > total * 0.002) {
+            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.02, Math.min(w, h) * 0.07);
+            const localBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.08).length;
+            if (rs > 0.10 && localBright > total * 0.003) {
               return resolve({ descriptor: 'exhaust tip feature' });
             }
           }
 
           // Simple exterior views
           if (topViewLikely) return resolve({ descriptor: 'top aerial view' });
-          if (sideDiff > 0.06) return resolve({ descriptor: 'side profile view' });
-          if (twin || (brightR > 0.10 && wide)) return resolve({ descriptor: 'front exterior view' });
+          if (sideDiff > 0.07) return resolve({ descriptor: 'side profile view' });
+          if (twin || (brightR > 0.12 && wide)) return resolve({ descriptor: 'front exterior view' });
           return resolve({ descriptor: 'rear exterior view' });
         } catch {
-          return resolve({ descriptor: 'front exterior view' });
+          return resolve({ descriptor: 'vehicle exterior view' });
         }
       };
-      img.onerror = () => resolve({ descriptor: 'front exterior view' });
+      img.onerror = () => resolve({ descriptor: 'vehicle exterior view' });
       img.src = url;
     });
 
@@ -384,7 +384,7 @@ export default function AltTextGenerator() {
     const zip = new JSZip();
     try {
       const contents = await zip.loadAsync(file);
-      const out = [];
+      const imageGroups = {};
 
       // Recursively process all files, including subfolders
       const processFolder = async (folder) => {
@@ -394,15 +394,33 @@ export default function AltTextGenerator() {
           } else {
             const ext = filename.split('.').pop().toLowerCase();
             if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(ext)) {
+              const baseName = filename.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
+              if (!imageGroups[baseName]) imageGroups[baseName] = [];
               const blob = await entry.async('blob');
               const url = URL.createObjectURL(blob);
-              const { descriptor } = await analyzeImage(url); // Analyze each image individually
-              out.push({ id: Date.now() + Math.random(), filename, url, altText: buildAlt(descriptor), blob });
+              const { descriptor } = await analyzeImage(url); // Analyze each image
+              imageGroups[baseName].push({ filename, blob, url, descriptor });
             }
           }
         }
       };
       await processFolder(contents);
+
+      const out = [];
+      for (const baseName in imageGroups) {
+        const group = imageGroups[baseName];
+        if (group.length > 0) {
+          group.forEach((img) => {
+            out.push({
+              id: Date.now() + Math.random(),
+              filename: img.filename,
+              url: img.url,
+              altText: buildAlt(img.descriptor), // Use individual descriptor
+              blob: img.blob,
+            });
+          });
+        }
+      }
 
       setImages(out);
       setShowResults(true);
