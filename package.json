@@ -13,6 +13,8 @@
     "next": "^14.0.0",
     "lucide-react": "^0.263.1",
     "jszip": "^3.10.1",
-    "jspdf": "^2.5.1"
+    "jspdf": "^2.5.1",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow-models/mobilenet": "^2.1.0"
   }
 }
