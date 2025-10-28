@@ -56,6 +56,40 @@ export default function AltTextGenerator() {
     return clamp(out.replace(/\s{2,}/g, ' '));
   };
 
+  // ---- Convert an item (with blob or blob: url) to a data:image/... URL
+async function getImageDataUrl(item) {
+  // If we already have a data URL, just return it
+  if (item?.url && typeof item.url === "string" && item.url.startsWith("data:image/")) {
+    return item.url;
+  }
+
+  // Prefer an existing Blob if present
+  let blob = item?.blob instanceof Blob ? item.blob : null;
+
+  // If no Blob, but a blob: URL exists, fetch it to a Blob
+  if (!blob && item?.url && typeof item.url === "string" && item.url.startsWith("blob:")) {
+    const resp = await fetch(item.url);
+    if (!resp.ok) throw new Error(`Blob fetch failed with ${resp.status}`);
+    blob = await resp.blob();
+  }
+
+  if (!blob) throw new Error("No blob found for image");
+
+  // Read Blob → data URL
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("FileReader failed"));
+    reader.readAsDataURL(blob);
+  });
+
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) {
+    throw new Error("Failed to build data:image URL");
+  }
+  return dataUrl;
+}
+
+
   // ---- Filename canonicalization (dedupe by responsive suffixes) ----
   const canonicalName = (name) => {
     const dot = name.lastIndexOf('.');
@@ -218,29 +252,49 @@ export default function AltTextGenerator() {
       setImages(uniques);
       setShowResults(true);
 
-      // sequential AI
-      for (const item of uniques) {
-        setImages((prev) => prev.map(p => p.id === item.id ? { ...p, processing: true } : p));
+     // sequential AI
+for (const item of uniques) {
+  setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, processing: true } : p)));
 
-        // ==== FIX: Build guaranteed data URL (instead of assuming item.blob always exists) ====
-        let dataUrl;
-        try {
-          dataUrl = await getImageDataUrl(item);
-          // console.log('DATAURL_PREFIX', String(dataUrl).slice(0, 30)); // should start with data:image/
-        } catch (e) {
-          console.error('DATAURL_BUILD_ERROR', e);
-          setImages(prev => prev.map(p => p.id === item.id ? { ...p, alt: 'Could not read image', processing: false } : p));
-          // eslint-disable-next-line no-continue
-          continue;
-        }
+  // ==== FIX: Build guaranteed data URL (instead of assuming item.blob always exists) ====
+  let dataUrl;
+  try {
+    dataUrl = await getImageDataUrl(item);
+    // console.log('DATAURL_PREFIX', String(dataUrl).slice(0, 30)); // should start with data:image/
+  } catch (e) {
+    console.error('DATAURL_BUILD_ERROR', e);
+    setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt: 'Could not read image', processing: false } : p)));
+    // eslint-disable-next-line no-continue
+    continue;
+  }
 
-        const meta = {
-          year: vehicleInfo.year,
-          make: vehicleInfo.make,
-          model: vehicleInfo.model,
-          trim: vehicleInfo.trim,
-          color: vehicleInfo.color,
-        };
+  const meta = {
+    year:  vehicleInfo.year,
+    make:  vehicleInfo.make,
+    model: vehicleInfo.model,
+    trim:  vehicleInfo.trim,
+    color: vehicleInfo.color,
+  };
+
+  // Call your Hugging Face alt generator (proxied via /api/alt)
+  const resp = await fetch("/api/alt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageDataUrl: dataUrl, meta }),
+  });
+
+  const data = await resp.json().catch(() => null);
+
+  let alt = "Analysis failed";
+  if (resp.ok && data && data.ok && data.alt) {
+    alt = data.alt;
+  }
+
+  setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p)));
+  // eslint-disable-next-line no-await-in-loop
+  await new Promise((r) => setTimeout(r, 100));
+}
+
 
         // Call your Hugging Face alt generator (proxied via /api/alt)
         const resp = await fetch("/api/alt", {
