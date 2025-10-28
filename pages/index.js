@@ -3,12 +3,6 @@ import React, { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 
-// === Front-end stays the same visually ===
-// Changes:
-// - Hybrid dedupe (filename + perceptual hash)
-// - Thumbnails first, then sequential calls to /api/alt
-// - Server returns canonical descriptor; we build final alt
-
 export default function AltTextGenerator() {
   // ---- Auth ----
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -32,15 +26,13 @@ export default function AltTextGenerator() {
   const [processing, setProcessing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
-  const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
-
   // ---- Helpers ----
+  const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
-  // Uppercase known Acura models even if Make is empty
   const modelName = (m, make) => {
     if (!m) return '';
     const up = m.toUpperCase();
-    if (ACURA_UPPERCASE_MODELS.includes(up)) return up;
+    if (ACURA_UPPERCASE_MODELS.includes(up)) return up; // uppercase Acura codes even if make omitted
     return cap(m);
   };
   const clamp = (s) => (s.length <= 125 ? s : s.slice(0, 125).trim());
@@ -57,10 +49,11 @@ export default function AltTextGenerator() {
     return parts;
   };
 
-  const buildAlt = (descriptor) => {
+  const buildAlt = (descriptor, environment) => {
     const base = subject();
-    const parts = [base, descriptor].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
-    return clamp(parts);
+    const env = environment ? ` ${environment}` : '';
+    const out = [base, descriptor].filter(Boolean).join(' ').trim() + env;
+    return clamp(out.replace(/\s{2,}/g, ' '));
   };
 
   // ---- Filename canonicalization (dedupe by responsive suffixes) ----
@@ -96,7 +89,6 @@ export default function AltTextGenerator() {
     const ctx = c.getContext('2d');
     ctx.drawImage(imgEl, 0, 0, size, size);
     const { data } = ctx.getImageData(0, 0, size, size);
-
     const gray = [];
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i], g = data[i+1], b = data[i+2];
@@ -112,24 +104,23 @@ export default function AltTextGenerator() {
     return d;
   };
 
-  // ---- Server call: ask proper Vision AI for descriptor ----
+  // ---- Server call (Vision) ----
   const fetchCanonicalDescriptor = async (dataUrl, meta) => {
     try {
-      const base64 = dataUrl.split(',')[1];
       const res = await fetch('/api/alt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64, meta }),
+        body: JSON.stringify({ imageDataUrl: dataUrl, meta }),
       });
       if (!res.ok) {
         console.warn('Alt API error', await res.text());
-        return null;
+        return { descriptor: null, environment: '' };
       }
       const json = await res.json();
-      return json?.descriptor || null;
+      return { descriptor: json?.descriptor || null, environment: json?.environment || '' };
     } catch (e) {
       console.warn('fetch /api/alt failed', e);
-      return null;
+      return { descriptor: null, environment: '' };
     }
   };
 
@@ -199,11 +190,11 @@ export default function AltTextGenerator() {
         };
       });
 
-      // 1) show thumbnails
+      // show thumbnails
       setImages(uniques);
       setShowResults(true);
 
-      // 2) sequential AI
+      // sequential AI
       for (const item of uniques) {
         setImages((prev) => prev.map(p => p.id === item.id ? { ...p, processing: true } : p));
 
@@ -219,10 +210,10 @@ export default function AltTextGenerator() {
           model: vehicleInfo.model,
         };
 
-        let descriptor = await fetchCanonicalDescriptor(dataUrl, meta);
-        if (!descriptor) descriptor = 'front three-quarter view'; // safe fallback
+        const { descriptor, environment } = await fetchCanonicalDescriptor(dataUrl, meta);
+        const finalDescriptor = descriptor || 'front view';
+        const alt = buildAlt(finalDescriptor, environment);
 
-        const alt = buildAlt(descriptor);
         setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p)));
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 100));
