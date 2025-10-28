@@ -1,7 +1,9 @@
 // pages/index.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
+import * as tf from '@tensorflow/tfjs';
+import * as mobilenet from '@tensorflow-models/mobilenet';
 
 export default function AltTextGenerator() {
   // ---- Auth ----
@@ -20,11 +22,24 @@ export default function AltTextGenerator() {
   });
 
   // ---- App state ----
-  const [images, setImages] = useState([]);
+  const [images, setImages] = useState([]); // [{id, filename, url, blob, hash, alt, processing}]
   const [showResults, setShowResults] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+
+  // ---- Local AI model (free, in-browser) ----
+  const modelRef = useRef(null);
+  const ensureModel = async () => {
+    if (!modelRef.current) {
+      modelRef.current = await mobilenet.load(); // small + fast
+      // warm up
+      await tf.nextFrame();
+      // eslint-disable-next-line no-console
+      console.log('✅ MobileNet loaded');
+    }
+    return modelRef.current;
+  };
 
   const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
 
@@ -60,358 +75,200 @@ export default function AltTextGenerator() {
     return clamp(parts);
   };
 
-  const areImagesSimilar = (n1, n2) => {
-    const clean = (s) => s.replace(/[-_](s|m|l|xl|small|medium|large|xlarge|\d+x\d+)\./i, '.');
-    return clean(n1) === clean(n2);
-  };
-
-  // ---------- Vision Heuristics (expanded) ----------
-  const analyzeImage = (url) =>
-    new Promise((resolve) => {
+  // -----------------------------
+  // Perceptual hashing (aHash) for content de-dup
+  // -----------------------------
+  const urlToImageElement = (url) =>
+    new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        try {
-          const maxDim = 256;
-          const scale = Math.min(maxDim / img.width, maxDim / img.height);
-          const w = Math.max(1, Math.floor(img.width * scale));
-          const h = Math.max(1, Math.floor(img.height * scale));
-
-          const c = document.createElement('canvas');
-          c.width = w;
-          c.height = h;
-          const ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0, w, h);
-          const { data } = ctx.getImageData(0, 0, w, h);
-
-          const total = w * h;
-
-          // Stats
-          let dark = 0, bright = 0, gray = 0, satSum = 0;
-          let edge = 0;
-          const lum = new Float32Array(total);
-
-          const colBright = new Array(w).fill(0);
-          const rowBright = new Array(h).fill(0);
-          const brPts = [];
-
-          for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-              const i = (y * w + x) * 4;
-              const r = data[i], g = data[i + 1], b = data[i + 2];
-
-              const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-              lum[y * w + x] = L;
-
-              const bri = (r + g + b) / 3;
-              if (bri < 55) dark++;
-              if (bri > 200) { bright++; brPts.push({ x, y, bri }); }
-              colBright[x] += bri;
-              rowBright[y] += bri;
-
-              const max = Math.max(r, g, b), min = Math.min(r, g, b);
-              const sat = max === 0 ? 0 : (max - min) / max;
-              satSum += sat;
-
-              if (Math.abs(r - g) < 12 && Math.abs(g - b) < 12) gray++;
-            }
-          }
-
-          const sobel = (x, y) => {
-            const idx = (yy, xx) => lum[Math.max(0, Math.min(h - 1, yy)) * w + Math.max(0, Math.min(w - 1, xx))] || 0;
-            const gx =
-              -idx(y - 1, x - 1) + idx(y - 1, x + 1) +
-              -2 * idx(y, x - 1) + 2 * idx(y, x + 1) +
-              -idx(y + 1, x - 1) + idx(y + 1, x + 1);
-            const gy =
-              idx(y - 1, x - 1) + 2 * idx(y - 1, x) + idx(y - 1, x + 1) -
-              (idx(y + 1, x - 1) + 2 * idx(y + 1, x) + idx(y + 1, x + 1));
-            return Math.hypot(gx, gy);
-          };
-          for (let y = 1; y < h - 1; y++) {
-            for (let x = 1; x < w - 1; x++) edge += sobel(x, y);
-          }
-
-          const brightR = bright / total;
-          const darkR = dark / total;
-          const avgSat = satSum / total;
-          const grayR = gray / total;
-          const edgeD = edge / total;
-
-          const topThird = rowBright.slice(0, Math.floor(h / 3)).reduce((a, v) => a + v, 0);
-          const midThird = rowBright.slice(Math.floor(h / 3), Math.floor((2 * h) / 3)).reduce((a, v) => a + v, 0);
-          const botThird = rowBright.slice(Math.floor((2 * h) / 3)).reduce((a, v) => a + v, 0);
-
-          const interiorScore =
-            (darkR > 0.30 ? 1 : 0) +
-            (avgSat < 0.22 ? 1 : 0) +
-            (edgeD > 22 ? 1 : 0) +
-            (grayR > 0.28 ? 1 : 0);
-
-          const isInterior = interiorScore >= 2;
-
-          const centroid = (pts) => {
-            if (!pts.length) return { cx: w / 2, cy: h / 2, spread: 9999, vx: 0, vy: 0 };
-            let cx = 0, cy = 0;
-            pts.forEach((p) => { cx += p.x; cy += p.y; });
-            cx /= pts.length; cy /= pts.length;
-            let vx = 0, vy = 0;
-            pts.forEach((p) => { vx += (p.x - cx) ** 2; vy += (p.y - cy) ** 2; });
-            vx /= pts.length; vy /= pts.length;
-            return { cx, cy, spread: Math.sqrt(vx + vy), vx, vy };
-          };
-          const brightCentroid = centroid(brPts);
-
-          const ringScore = (cx, cy, rMin, rMax) => {
-            let hits = 0, samples = 0;
-            for (let yy = Math.max(1, Math.floor(cy - rMax)); yy < Math.min(h - 1, Math.ceil(cy + rMax)); yy++) {
-              for (let xx = Math.max(1, Math.floor(cx - rMax)); xx < Math.min(w - 1, Math.ceil(cx + rMax)); xx++) {
-                const rr = Math.hypot(xx - cx, yy - cy);
-                if (rr >= rMin && rr <= rMax) {
-                  samples++;
-                  const e = Math.abs(
-                    lum[yy * w + xx] -
-                      (lum[yy * w + (xx + 1)] + lum[(yy + 1) * w + xx]) / 2
-                  );
-                  if (e > 25) hits++;
-                }
-              }
-            }
-            return samples ? hits / samples : 0;
-          };
-
-          // ---------- INTERIOR ----------
-          if (isInterior) {
-            const { cx, cy, spread, vx, vy } = brightCentroid;
-            const centerish = cx > w * 0.33 && cx < w * 0.67 && cy > h * 0.35 && cy < h * 0.75;
-            const lowCenter = centerish && cy > h * 0.45;
-            const sideish = cx < w * 0.25 || cx > w * 0.75;
-
-            if (brPts.length > total * 0.008 && lowCenter && spread < Math.min(w, h) * 0.16) {
-              return resolve({ descriptor: 'detail of gear shifter' });
-            }
-            if (
-              brPts.length > total * 0.006 &&
-              sideish &&
-              vy > vx * 1.2 &&
-              cy > h * 0.25 && cy < h * 0.7
-            ) {
-              return resolve({ descriptor: 'detail of paddle shifter' });
-            }
-
-            const wheelRing = ringScore(w / 2, h / 2, Math.min(w, h) * 0.20, Math.min(w, h) * 0.38);
-            if (wheelRing > 0.09) {
-              return resolve({ descriptor: 'detail of steering wheel' });
-            }
-
-            const midRectBright = midThird / (w * (h / 3) * 255);
-            if (midRectBright > 0.55 && avgSat < 0.25) {
-              return resolve({ descriptor: 'detail of infotainment screen' });
-            }
-
-            const upperBright = topThird / (w * (h / 3) * 255);
-            if (upperBright > 0.5 && brPts.length > total * 0.006 && cy < h * 0.45) {
-              let leftPeak = 0, rightPeak = 0;
-              for (let x = 0; x < w; x++) {
-                if (x < w / 2) leftPeak = Math.max(leftPeak, colBright[x]);
-                else rightPeak = Math.max(rightPeak, colBright[x]);
-              }
-              if ((leftPeak > 0 && rightPeak > 0) && Math.abs(leftPeak - rightPeak) > 0) {
-                return resolve({ descriptor: 'detail of instrument cluster' });
-              }
-            }
-
-            if (botThird > midThird * 1.05 && edgeD > 26) {
-              return resolve({ descriptor: 'detail of climate controls' });
-            }
-            if (edgeD > 24 && cy > h * 0.45) {
-              return resolve({ descriptor: 'detail of center console' });
-            }
-            if (edgeD > 23 && avgSat > 0.25) {
-              return resolve({ descriptor: 'detail of seat stitching' });
-            }
-            if (topThird < midThird && midThird > botThird) {
-              return resolve({ descriptor: 'detail of dashboard' });
-            }
-            return resolve({ descriptor: 'interior detail' });
-          }
-
-          // ---------- EXTERIOR ----------
-          const wide = w >= h * 1.15;
-          const leftSum = colBright.slice(0, Math.floor(w / 2)).reduce((a, v) => a + v, 0);
-          const rightSum = colBright.slice(Math.floor(w / 2)).reduce((a, v) => a + v, 0);
-          const sideDiff = Math.abs(leftSum - rightSum) / (total * 255);
-          const topViewLikely = topThird > botThird * 1.18;
-
-          // wheel / brake caliper
-          const corners = [
-            { x: w * 0.2, y: h * 0.75 },
-            { x: w * 0.8, y: h * 0.75 },
-            { x: w * 0.2, y: h * 0.25 },
-            { x: w * 0.8, y: h * 0.25 },
-          ];
-          for (const k of corners) {
-            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.08, Math.min(w, h) * 0.18);
-            if (rs > 0.13) {
-              const nearWheelBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.22).length;
-              if (nearWheelBright > total * 0.004 && avgSat > 0.28) {
-                return resolve({ descriptor: 'detail of brake caliper' });
-              }
-              return resolve({ descriptor: 'detail of wheel' });
-            }
-          }
-
-          // headlights hint (twin lower)
-          const cols = new Array(w).fill(0);
-          brPts.forEach((p) => { if (p.y > h * 0.5) cols[p.x]++; });
-          let L = { x: 0, v: 0 }, R = { x: 0, v: 0 };
-          cols.forEach((v, x) => {
-            if (x < w / 2 && v > L.v) L = { x, v };
-            if (x >= w / 2 && v > R.v) R = { x, v };
-          });
-          const twin = L.v > brPts.length * 0.02 && R.v > brPts.length * 0.02 && Math.abs(L.x - R.x) > w * 0.25;
-
-          // grille & emblem logic
-          let grilleLike = false;
-          let centerVert = 0;
-          for (let x = Math.floor(w * 0.35); x < Math.floor(w * 0.65); x++) centerVert += colBright[x];
-          if (centerVert / (w * h) > 30 && edgeD > 26 && !topViewLikely) {
-            grilleLike = true;
-          }
-          const compactBadge =
-            brPts.length > total * 0.006 &&
-            brightCentroid.spread < Math.min(w, h) * 0.12 &&
-            brightCentroid.cy > h * 0.35 &&
-            brightCentroid.cx > w * 0.35 &&
-            brightCentroid.cx < w * 0.65;
-
-          if (grilleLike && compactBadge) {
-            return resolve({ descriptor: 'detail of grille with emblem' });
-          }
-          if (grilleLike) {
-            if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front view' });
-            return resolve({ descriptor: 'detail of grille' });
-          }
-          if (compactBadge) {
-            return resolve({ descriptor: 'detail of badge' });
-          }
-
-          // door handle: small bright rectangle on side mid-height near far left/right
-          const doorHandle = brPts.some(
-            (p) =>
-              (p.x < w * 0.18 || p.x > w * 0.82) &&
-              p.y > h * 0.35 && p.y < h * 0.6
-          );
-          if (doorHandle && sideDiff > 0.03) {
-            return resolve({ descriptor: 'detail of door handle' });
-          }
-
-          // side mirror
-          if (brPts.length > total * 0.004) {
-            const sideMirror = brPts.some(
-              (p) => (p.x < w * 0.12 || p.x > w * 0.88) && p.y > h * 0.3 && p.y < h * 0.7
-            );
-            if (sideMirror) return resolve({ descriptor: 'detail of side mirror' });
-          }
-
-          // spoiler: narrow bright/edge band along very top width
-          const topBand = rowBright.slice(0, Math.max(2, Math.floor(h * 0.06))).reduce((a, v) => a + v, 0);
-          if (topBand > midThird * 0.25 && edgeD > 22 && !topViewLikely) {
-            return resolve({ descriptor: 'detail of spoiler' });
-          }
-
-          // sunroof (kept)
-          if (topThird < midThird * 0.8 && topThird < botThird * 0.8 && grayR > 0.25) {
-            return resolve({ descriptor: 'detail of sunroof' });
-          }
-
-          // fog light: small bright blobs at very low corners when front-ish
-          const lowLeftBright = brPts.filter(p => p.x < w * 0.2 && p.y > h * 0.8).length;
-          const lowRightBright = brPts.filter(p => p.x > w * 0.8 && p.y > h * 0.8).length;
-          if ((lowLeftBright + lowRightBright) > total * 0.003 && (twin || (brightR > 0.08 && wide))) {
-            return resolve({ descriptor: 'detail of fog light' });
-          }
-
-          // headlight/taillight (kept)
-          const leftLowerBright = brPts.filter(p => p.x < w * 0.25 && p.y > h * 0.55).length;
-          const rightLowerBright = brPts.filter(p => p.x > w * 0.75 && p.y > h * 0.55).length;
-          if (leftLowerBright + rightLowerBright > total * 0.004) {
-            if (twin || (brightR > 0.08 && wide)) {
-              return resolve({ descriptor: 'detail of headlight' });
-            } else {
-              return resolve({ descriptor: 'detail of taillight' });
-            }
-          }
-
-          // rear diffuser: high edge density near bottom center & darker bottom band
-          const bottomBandEdges = (() => {
-            let e = 0, cnt = 0;
-            for (let y = Math.floor(h * 0.8); y < h - 1; y++) {
-              for (let x = Math.floor(w * 0.3); x < Math.floor(w * 0.7); x++) {
-                e += Math.abs(lum[y * w + x] - lum[y * w + (x + 1)]);
-                cnt++;
-              }
-            }
-            return cnt ? e / cnt : 0;
-          })();
-          if (bottomBandEdges > 18 && botThird < midThird * 0.95 && !topViewLikely) {
-            return resolve({ descriptor: 'detail of rear diffuser' });
-          }
-
-          // exhaust tip: small shiny ring-ish near lower outer corners
-          const exCorners = [
-            { x: w * 0.12, y: h * 0.88 },
-            { x: w * 0.88, y: h * 0.88 },
-          ];
-          for (const k of exCorners) {
-            const rs = ringScore(k.x, k.y, Math.min(w, h) * 0.04, Math.min(w, h) * 0.09);
-            const localBright = brPts.filter(p => Math.hypot(p.x - k.x, p.y - k.y) < Math.min(w, h) * 0.12).length;
-            if (rs > 0.11 && localBright > total * 0.002) {
-              return resolve({ descriptor: 'detail of exhaust tip' });
-            }
-          }
-
-          // Simple exterior views
-          if (topViewLikely) return resolve({ descriptor: 'top view' });
-          if (sideDiff > 0.05) return resolve({ descriptor: 'profile view' });
-          if (twin || (brightR > 0.08 && wide)) return resolve({ descriptor: 'front view' });
-          return resolve({ descriptor: 'rear view' });
-        } catch {
-          return resolve({ descriptor: 'front view' });
-        }
-      };
-      img.onerror = () => resolve({ descriptor: 'front view' });
+      img.onload = () => resolve(img);
+      img.onerror = (e) => reject(e);
       img.src = url;
     });
 
-  // ---- ZIP processing ----
+  const aHashFromImageElement = (imgEl) => {
+    const size = 8;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(imgEl, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+
+    const gray = [];
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const v = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+      gray.push(v);
+    }
+    const avg = gray.reduce((a, b) => a + b, 0) / gray.length;
+    return gray.map(v => (v >= avg ? '1' : '0')).join('');
+  };
+
+  const hamming = (a, b) => {
+    if (!a || !b || a.length !== b.length) return 64;
+    let d = 0;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+    return d;
+  };
+
+  // -----------------------------
+  // Free local AI: classify via MobileNet
+  // -----------------------------
+  const classifyWithMobileNet = async (imgEl) => {
+    const model = await ensureModel();
+    // MobileNet can take an HTMLImageElement directly
+    const preds = await model.classify(imgEl, 5); // top-5 labels
+    return preds.map(p => p.className.toLowerCase());
+  };
+
+  // -----------------------------
+  // Map labels → AIO AHM v2.5 canonical descriptor
+  // -----------------------------
+  const canonicalizeFromLabels = (labels) => {
+    const s = labels.join(' ');
+    // Interior parts
+    if (/\b(gearshift|gear stick|gear lever|shift knob|manual transmission|gear shifter)\b/.test(s)) return 'gear shifter detail';
+    if (/\bpaddle\b/.test(s)) return 'detail of paddle shifter';
+    if (/\b(steering wheel|steering)\b/.test(s)) return 'steering wheel detail';
+    if (/\b(instrument panel|dashboard|instrument cluster|gauge)\b/.test(s)) return 'instrument cluster detail';
+    if (/\b(screen|display|touchscreen|infotainment)\b/.test(s)) return 'infotainment screen detail';
+    if (/\b(center console)\b/.test(s)) return 'center console detail';
+    if (/\b(seat|upholstery)\b/.test(s) && /\bstitch\b/.test(s)) return 'seat stitching detail';
+
+    // Exterior parts
+    if (/\b(headlight|head lamp)\b/.test(s)) return 'headlight detail';
+    if (/\b(taillight|rear light)\b/.test(s)) return 'taillight detail';
+    if (/\b(wheel|rim|tire)\b/.test(s)) return 'detail of wheel';
+    if (/\b(brake caliper|caliper)\b/.test(s)) return 'detail of brake caliper';
+    if (/\b(grille|emblem|badge)\b/.test(s)) return s.includes('badge') || s.includes('emblem') ? 'detail of badge' : 'detail of grille with emblem';
+    if (/\b(door handle)\b/.test(s)) return 'detail of door handle';
+    if (/\b(mirror)\b/.test(s)) return 'side mirror detail';
+    if (/\b(spoiler)\b/.test(s)) return 'detail of spoiler';
+    if (/\b(sunroof)\b/.test(s)) return 'detail of sunroof';
+    if (/\b(fog light)\b/.test(s)) return 'detail of fog light';
+    if (/\b(exhaust)\b/.test(s)) return 'detail of exhaust tip';
+    if (/\b(rear diffuser)\b/.test(s)) return 'detail of rear diffuser';
+
+    // Views — MobileNet won’t give view; use generic safe default
+    return null; // let the fallback choose a simple view below
+  };
+
+  // Simple view fallback if no part found
+  const simpleViewFallback = (imgEl) => {
+    // quick geometry heuristic: wide aspect → likely front view
+    const { naturalWidth: w, naturalHeight: h } = imgEl;
+    if (w > h * 1.15) return 'front three-quarter view';
+    return 'side profile';
+  };
+
+  // -----------------------------
+  // ZIP processing → dedupe → thumbnails → sequential AI
+  // -----------------------------
   const processZipFile = async (file) => {
     setProcessing(true);
-    const zip = new JSZip();
     try {
+      const zip = new JSZip();
       const contents = await zip.loadAsync(file);
-      const out = [];
-      const seen = new Set();
+      const entries = Object.entries(contents.files).filter(([_, entry]) => !entry.dir);
 
-      for (const [filename, entry] of Object.entries(contents.files)) {
-        if (entry.dir) continue;
-        const ext = filename.split('.').pop().toLowerCase();
-        if (!['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(ext)) continue;
-        if (Array.from(seen).some((n) => areImagesSimilar(n, filename))) continue;
+      const supported = ['jpg','jpeg','png','gif','webp','avif'];
+      const imageEntries = entries.filter(([name]) => {
+        const ext = name.split('.').pop().toLowerCase();
+        return supported.includes(ext);
+      });
 
+      // Load blobs + temp URLs
+      const all = [];
+      for (const [filename, entry] of imageEntries) {
         const blob = await entry.async('blob');
         const url = URL.createObjectURL(blob);
-
-        const { descriptor } = await analyzeImage(url); // filename ignored
-        const alt = buildAlt(descriptor);
-
-        out.push({ id: Date.now() + Math.random(), filename, url, alt, blob });
-        seen.add(filename);
+        all.push({ filename, blob, url, size: blob.size });
       }
 
-      setImages(out);
+      // Compute perceptual hashes
+      const withHashes = [];
+      for (const it of all) {
+        try {
+          const imgEl = await urlToImageElement(it.url);
+          const hash = aHashFromImageElement(imgEl);
+          withHashes.push({ ...it, hash });
+        } catch {
+          withHashes.push({ ...it, hash: null });
+        }
+      }
+
+      // Group by similarity (hamming ≤ 6)
+      const groups = [];
+      for (const it of withHashes) {
+        let placed = false;
+        for (const g of groups) {
+          if (it.hash && g.rep) {
+            if (hamming(it.hash, g.rep) <= 6) {
+              g.items.push(it);
+              placed = true;
+              break;
+            }
+          } else if (!it.hash && !g.rep) {
+            g.items.push(it);
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) groups.push({ rep: it.hash, items: [it] });
+      }
+
+      // Choose one per group (smallest size)
+      const uniques = groups.map((g) => {
+        const chosen = g.items.reduce((a, b) => (a.size <= b.size ? a : b));
+        return {
+          id: Date.now() + Math.random(),
+          filename: chosen.filename,
+          url: chosen.url,
+          blob: chosen.blob,
+          hash: chosen.hash,
+          alt: '',
+          processing: false,
+        };
+      });
+
+      // 1) Show thumbnails (no alt yet)
+      setImages(uniques);
       setShowResults(true);
+
+      // 2) Sequentially analyze and fill alt text
+      await ensureModel(); // load once
+      for (const item of uniques) {
+        // mark as processing
+        setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, processing: true } : p)));
+
+        // Use the displayed image element
+        const imgEl = await urlToImageElement(item.url);
+
+        // Get labels from MobileNet (free, local)
+        let labels = [];
+        try {
+          labels = await classifyWithMobileNet(imgEl);
+        } catch {
+          labels = [];
+        }
+
+        // Map to canonical descriptor or fallback view
+        let descriptor = canonicalizeFromLabels(labels);
+        if (!descriptor) descriptor = simpleViewFallback(imgEl);
+
+        // Build final alt
+        const alt = buildAlt(descriptor);
+
+        // update
+        setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p)));
+        // tiny pause so progress feels smooth
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 120));
+      }
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert('Error processing ZIP file. Please try again.');
     } finally {
@@ -438,6 +295,7 @@ export default function AltTextGenerator() {
     else alert('Please drop a ZIP file');
   };
   const copyToClipboard = (t, i) => {
+    if (!t) return;
     navigator.clipboard.writeText(t);
     setCopiedIndex(i);
     setTimeout(() => setCopiedIndex(null), 2000);
@@ -464,7 +322,7 @@ export default function AltTextGenerator() {
       const isPng = img.filename.toLowerCase().endsWith('.png');
       doc.addImage(dataUrl, isPng ? 'PNG' : 'JPEG', 20, y, 60, 40);
       doc.setFontSize(10);
-      const split = doc.splitTextToSize(img.alt, 100);
+      const split = doc.splitTextToSize(img.alt || '', 100);
       doc.text(split, 85, y + 5);
       y += 50;
     }
@@ -488,6 +346,8 @@ export default function AltTextGenerator() {
       setIsAuthenticated(true);
       sessionStorage.setItem('authenticated', 'true');
       setPasswordError('');
+      // Preload model after login
+      ensureModel();
     } else {
       setPasswordError('Incorrect password. Please try again.');
       setPasswordInput('');
@@ -499,7 +359,7 @@ export default function AltTextGenerator() {
     setPasswordInput('');
   };
 
-  // ---------------- RENDER ----------------
+  // ---------------- RENDER (UI unchanged) ----------------
   if (!isAuthenticated) {
     return (
       <div style={styles.loginContainer}>
@@ -549,21 +409,24 @@ export default function AltTextGenerator() {
           <div style={styles.imageList}>
             {images.map((img, index) => (
               <div key={img.id} style={styles.imageCard}>
-                <img src={img.url} alt={img.alt} style={styles.thumbnail} />
+                <img src={img.url} alt={img.alt || 'Vehicle image'} style={styles.thumbnail} />
                 <div style={styles.altTextContainer}>
                   <label style={styles.label}>Alt Text</label>
                   <div style={styles.textBoxWrapper}>
-                    <p style={styles.altTextBox}>{img.alt}</p>
+                    <p style={styles.altTextBox}>
+                      {img.alt || (img.processing ? 'Analyzing image…' : '')}
+                    </p>
                     <button
                       onClick={() => copyToClipboard(img.alt, index)}
                       style={styles.copyButton}
                       title="Copy to clipboard"
+                      disabled={!img.alt}
                     >
                       {copiedIndex === index ? '✓' : '📋'}
                     </button>
                   </div>
-                  <p style={{ ...styles.charCount, color: img.alt.length > 125 ? '#ef4444' : '#6b7280' }}>
-                    {img.alt.length} characters
+                  <p style={{ ...styles.charCount, color: img.alt && img.alt.length > 125 ? '#ef4444' : '#6b7280' }}>
+                    {img.alt ? `${img.alt.length} characters` : ''}
                   </p>
                 </div>
               </div>
@@ -679,7 +542,7 @@ export default function AltTextGenerator() {
   );
 }
 
-/* ---------- Styles ---------- */
+/* ---------- Styles (unchanged) ---------- */
 const styles = {
   loginContainer: { minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' },
   loginCard: { background: 'white', borderRadius: '16px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', padding: '3rem', maxWidth: '400px', width: '100%' },
@@ -707,7 +570,7 @@ const styles = {
   inputLabel: { fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.5rem' },
   required: { color: '#ef4444' },
   optional: { color: '#9ca3af', fontSize: '0.75rem' },
-  input: { width: '100%', padding: '0.75rem 1rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '1rem', outline: 'none' },
+  input: { width: '100%', padding: '0.75rem 1rem', border: '1px solid '#d1d5db'", borderRadius: '8px', fontSize: '1rem', outline: 'none' },
 
   uploadBox: { border: '2px dashed #d1d5db', borderRadius: '8px', padding: '3rem', textAlign: 'center', background: '#f9fafb', transition: 'all 0.2s' },
   uploadBoxActive: { borderColor: '#3b82f6', background: '#eff6ff' },
