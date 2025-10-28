@@ -570,7 +570,7 @@ const styles = {
   inputLabel: { fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.5rem' },
   required: { color: '#ef4444' },
   optional: { color: '#9ca3af', fontSize: '0.75rem' },
-  input: { width: '100%', padding: '0.75rem 1rem', border: '1px solid '#d1d5db'", borderRadius: '8px', fontSize: '1rem', outline: 'none' },
+  input: { width: '100%', padding: '0.75rem 1rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '1rem', outline: 'none' },
 
   uploadBox: { border: '2px dashed #d1d5db', borderRadius: '8px', padding: '3rem', textAlign: 'center', background: '#f9fafb', transition: 'all 0.2s' },
   uploadBoxActive: { borderColor: '#3b82f6', background: '#eff6ff' },
