@@ -2,24 +2,22 @@
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { image, meta } = req.body || {};
-  if (!image) return res.status(400).json({ error: 'Missing image base64' });
+  const { imageDataUrl, meta } = req.body || {};
+  if (!imageDataUrl) return res.status(400).json({ error: 'Missing imageDataUrl' });
 
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  if (!OPENAI_API_KEY) {
-    return res.status(500).json({ error: 'Missing OPENAI_API_KEY env var' });
-  }
+  if (!OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY env var' });
 
-  // Canonical descriptor whitelist (AIO AHM v2.5)
+  // Canonical descriptor whitelist (AIO)
   const DESCRIPTORS = [
-    // Views
-    'front three-quarter view',
-    'rear three-quarter view',
-    'side profile',
+    // Views (simplified per your request)
     'front view',
     'rear view',
-    'top view',
-    // Interior parts
+    'profile view',
+    'high-angle front view',
+    'high-angle rear view',
+
+    // Interior / details
     'gear shifter detail',
     'detail of paddle shifter',
     'steering wheel detail',
@@ -28,7 +26,8 @@ export default async function handler(req, res) {
     'center console detail',
     'seat stitching detail',
     'interior detail',
-    // Exterior parts
+
+    // Exterior details
     'detail of wheel',
     'detail of brake caliper',
     'headlight detail',
@@ -44,36 +43,55 @@ export default async function handler(req, res) {
     'detail of rear diffuser'
   ];
 
+  // Optional environment phrases (only when obvious)
+  const ENVIRONMENTS = [
+    'on a city street',
+    'in an urban setting',
+    'on a racetrack',
+    'on a mountain road',
+    'on a desert road',
+    'in a showroom',
+    'in a studio setting',
+    'in snowy conditions',
+    'at night'
+  ];
+
   const instruction = `
 You are an automotive vision assistant for alt text generation.
-Return ONE descriptor from the whitelist exactly, nothing else.
 
-Rules:
-- Choose the most specific match first (e.g., "gear shifter detail" beats "interior detail").
-- If it's an interior shot with a visible part, pick that part.
-- If it's exterior and a clear angle, pick a view like "front three-quarter view".
-- Avoid confusing shiny knobs for "side mirror". Mirrors are exterior and mounted outside the door.
-- Output ONLY strict JSON: {"descriptor":"<one of the whitelist>"}
-- No extra text.
+OUTPUT:
+Return strict JSON only:
+{"descriptor":"<one value from DESCRIPTORS>","environment":"<one value from ENVIRONMENTS or empty string>"}
 
-Whitelist:
+RULES:
+- Choose EXACTLY ONE "descriptor" from DESCRIPTORS (no custom text).
+- Prefer specific interior parts when visible (e.g., "gear shifter detail").
+- If clearly exterior and angle is obvious, use one of: front view, rear view, profile view, high-angle front view, high-angle rear view.
+- Never use "three-quarter" phrasing.
+- "side mirror detail" is exterior only; do NOT confuse shiny interior knobs as mirrors.
+- "environment" is optional: include it ONLY if unmistakable. Otherwise return "".
+- Keep responses strictly to valid whitelist values.
+
+DESCRIPTORS:
 ${DESCRIPTORS.map(d => `- ${d}`).join('\n')}
-`;
 
-  // Build OpenAI request
+ENVIRONMENTS (optional):
+${ENVIRONMENTS.map(d => `- ${d}`).join('\n')}
+`.trim();
+
   const payload = {
-    model: 'gpt-4o-mini', // vision-capable, efficient
+    model: 'gpt-4o-mini',
+    temperature: 0,
     messages: [
       { role: 'system', content: instruction },
       {
         role: 'user',
         content: [
-          { type: 'text', text: `Vehicle context: ${meta?.year || ''} ${meta?.make || ''} ${meta?.model || ''}`.trim() },
-          { type: 'image_url', image_url: `data:image/jpeg;base64,${image}` }
+          { type: 'text', text: `Vehicle context: ${(meta?.year || '')} ${(meta?.make || '')} ${(meta?.model || '')}`.trim() },
+          { type: 'image_url', image_url: { url: imageDataUrl } }
         ]
       }
-    ],
-    temperature: 0
+    ]
   };
 
   try {
@@ -95,29 +113,36 @@ ${DESCRIPTORS.map(d => `- ${d}`).join('\n')}
     const json = await r.json();
     const raw = json?.choices?.[0]?.message?.content || '';
 
-    // Parse strict JSON; fall back to a safe view if parsing fails
-    let descriptor = null;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.descriptor === 'string' && DESCRIPTORS.includes(parsed.descriptor)) {
-        descriptor = parsed.descriptor;
-      }
-    } catch {
-      // sometimes model wraps code-blocks; strip and re-parse
-      const cleaned = raw.replace(/```json|```/g, '').trim();
+    // Robust parse (handles code fences)
+    const tryParse = (txt) => {
       try {
-        const parsed2 = JSON.parse(cleaned);
-        if (parsed2 && typeof parsed2.descriptor === 'string' && DESCRIPTORS.includes(parsed2.descriptor)) {
-          descriptor = parsed2.descriptor;
-        }
-      } catch { /* ignore */ }
+        const clean = txt.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(clean);
+        return parsed;
+      } catch { return null; }
+    };
+
+    let parsed = tryParse(raw);
+    if (!parsed) {
+      const match = raw.match(/"descriptor"\s*:\s*"([^"]+)"[^}]*"environment"\s*:\s*"([^"]*)"/i);
+      if (match) {
+        parsed = { descriptor: match[1], environment: match[2] };
+      }
     }
 
-    if (!descriptor) descriptor = 'front three-quarter view';
-    return res.status(200).json({ descriptor });
+    let descriptor = 'front view';
+    let environment = '';
+
+    if (parsed && typeof parsed.descriptor === 'string' && DESCRIPTORS.includes(parsed.descriptor)) {
+      descriptor = parsed.descriptor;
+    }
+    if (parsed && typeof parsed.environment === 'string' && (ENVIRONMENTS.includes(parsed.environment) || parsed.environment === '')) {
+      environment = parsed.environment;
+    }
+
+    return res.status(200).json({ descriptor, environment });
   } catch (err) {
     console.error('Server error', err);
     return res.status(500).json({ error: 'Server error' });
   }
 }
-
