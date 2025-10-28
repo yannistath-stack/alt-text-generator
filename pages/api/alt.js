@@ -1,43 +1,59 @@
 // /pages/api/alt.js
-// Uses Hugging Face Inference API (free tier) with BLIP captioning
-// Expects a POST body like:
-// { imageDataUrl: "data:image/jpeg;base64,...", meta: { year, make, model, trim, color, angle_hint } }
+// Hugging Face BLIP image captioning (free tier) → compose SEO alt text
+// Body can be either:
+// { imageDataUrl: "data:image/jpeg;base64,...", meta: {...} }
+//   or
+// { imageBase64: "<BASE64 ONLY>", contentType: "image/jpeg", meta: {...} }
 
-export const config = { api: { bodyParser: { sizeLimit: "20mb" } } };
+export const config = { api: { bodyParser: { sizeLimit: "25mb" } } };
 
 const HF_ENDPOINT =
   "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large";
 
-function dataUrlToBuffer(dataUrl) {
-  // Accepts data:image/jpeg;base64,AAA...
+/* ------------------ helpers ------------------ */
+
+function decodeDataUrl(dataUrl) {
+  // Accepts "data:image/<type>;base64,<payload>"
   if (!dataUrl || typeof dataUrl !== "string") return null;
+  if (dataUrl.startsWith("blob:")) {
+    // This is a frontend bug: server cannot read browser blob: URLs
+    throw Object.assign(new Error("Received a blob: URL. Send a data:image/... URL instead."), { status: 400 });
+  }
   const comma = dataUrl.indexOf(",");
   if (comma === -1) return null;
   const header = dataUrl.slice(0, comma).toLowerCase();
   const base64 = dataUrl.slice(comma + 1);
-  // Basic MIME sanity check
   if (!header.startsWith("data:image/")) return null;
   return Buffer.from(base64, "base64");
 }
 
+function decodeBase64Only(imageBase64) {
+  if (!imageBase64 || typeof imageBase64 !== "string") return null;
+  try {
+    return Buffer.from(imageBase64, "base64");
+  } catch {
+    return null;
+  }
+}
+
 function normalizeMake(make) {
   if (!make) return "";
-  const m = make.trim().toLowerCase();
+  const m = String(make).trim().toLowerCase();
   if (m === "acura") return "Acura";
   if (m === "honda") return "Honda";
-  return make.trim();
+  return String(make).trim();
 }
 
 function normalizeModel(model) {
   if (!model) return "";
-  // Acura models often uppercase
-  const upperModels = new Set(["MDX", "RDX", "TLX", "ILX", "RLX", "NSX", "ZDX", "CDX", "RSX", "TSX", "CL", "EL", "Integra"]);
-  const up = model.trim().toUpperCase();
-  if (upperModels.has(up)) return up;
-  // Honda models: keep case (e.g., Civic, Accord)
-  // If the user typed mdx, fix it:
-  if (["mdx","rdx","tlx","ilx","zdx","nsx","rsx","tsx"].includes(model.trim().toLowerCase())) return model.trim().toUpperCase();
-  return model.trim();
+  const upper = new Set(["MDX", "RDX", "TLX", "ILX", "RLX", "NSX", "ZDX", "CDX", "RSX", "TSX", "CL", "EL", "INTEGRA"]);
+  const s = String(model).trim();
+  const up = s.toUpperCase();
+  if (upper.has(up)) return up;
+  // common Acura typed lowercase
+  const acuraLower = ["mdx","rdx","tlx","ilx","zdx","nsx","rsx","tsx","rlx"];
+  if (acuraLower.includes(s.toLowerCase())) return s.toUpperCase();
+  return s;
 }
 
 function pickEnvironment(caption = "") {
@@ -52,7 +68,7 @@ function pickEnvironment(caption = "") {
   if (t.includes("parking")) return "parking lot";
   if (t.includes("highway") || t.includes("road")) return "daylight road";
   if (t.includes("city") || t.includes("street")) return "daylight street";
-  return "daylight"; // default
+  return "daylight";
 }
 
 function isInterior(caption = "") {
@@ -69,26 +85,28 @@ function isInterior(caption = "") {
   );
 }
 
-function buildAlt({ caption, meta = {} }) {
+function inferAngle(caption = "", hint = "") {
+  const h = String(hint || "").toLowerCase().trim();
+  if (h) return h;
+  const t = caption.toLowerCase();
+  if (t.includes("rear")) return "rear view";
+  if (t.includes("side") || t.includes("profile")) return "profile view";
+  if (t.includes("front")) return "front view";
+  if (t.includes("high angle")) return "high-angle view";
+  if (t.includes("low angle")) return "low-angle view";
+  return ""; // unknown
+}
+
+function composeAlt({ caption, meta = {} }) {
   const { year, make, model, trim, color, angle_hint } = meta || {};
   const Make = normalizeMake(make);
   const Model = normalizeModel(model);
 
   const env = pickEnvironment(caption);
   const interior = isInterior(caption);
+  const angle = inferAngle(caption, angle_hint);
 
-  // Angle: prefer hint from client if present; otherwise try to infer a little
-  let angle = angle_hint ? String(angle_hint).toLowerCase() : "";
-  if (!angle) {
-    if (caption.toLowerCase().includes("rear")) angle = "rear view";
-    else if (caption.toLowerCase().includes("side")) angle = "profile view";
-    else if (caption.toLowerCase().includes("front")) angle = "front view";
-  }
-
-  // Compose final, SEO-ready alt
-  // Keep it concise, factual, and keyword-rich without stuffing.
   const tokens = [];
-
   if (interior) {
     tokens.push(angle || "interior detail");
     tokens.push("interior");
@@ -102,8 +120,7 @@ function buildAlt({ caption, meta = {} }) {
   if (trim) tokens.push(String(trim).trim());
   if (color) tokens.push(String(color).trim());
 
-  // Add one distinct detail from caption if it seems useful
-  // (e.g., “gear shifter”, “steering wheel”, “LED headlights”)
+  // one detail if found
   const lower = caption.toLowerCase();
   const details = [
     ["gear shifter", ["shifter", "gear"]],
@@ -111,17 +128,16 @@ function buildAlt({ caption, meta = {} }) {
     ["center console", ["center console"]],
     ["dashboard", ["dashboard"]],
     ["LED headlights", ["headlight", "headlights"]],
-    ["wheel close-up", ["rim", "wheel close", "tire"]],
+    ["wheel close-up", ["rim", "wheel", "tire"]],
     ["seat upholstery", ["seat", "leather", "stitch"]],
   ];
   for (const [label, keys] of details) {
-    if (keys.some(k => lower.includes(k))) {
+    if (keys.some((k) => lower.includes(k))) {
       tokens.push(label);
       break;
     }
   }
 
-  // De-duplicate tokens and clean spaces
   const alt = Array.from(new Set(tokens.filter(Boolean)))
     .join(", ")
     .replace(/\s+/g, " ")
@@ -136,24 +152,11 @@ function buildAlt({ caption, meta = {} }) {
   };
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ ok: false, error: "Method not allowed" });
-  }
-
-  try {
-    const { imageDataUrl, meta } = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-    const buf = dataUrlToBuffer(imageDataUrl);
-    if (!buf) {
-      return res.status(400).json({ ok: false, error: "Invalid or missing image data URL" });
-    }
-
-    if (!process.env.HF_TOKEN) {
-      return res.status(500).json({ ok: false, error: "Missing HF_TOKEN environment variable" });
-    }
-
-    // Send raw image bytes to BLIP
-    const hfResp = await fetch(HF_ENDPOINT, {
+// Small retry for HF cold starts / loading
+async function hfCaptionWithRetry(buf, tries = 3) {
+  let lastText = "";
+  for (let i = 0; i < tries; i++) {
+    const r = await fetch(HF_ENDPOINT, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.HF_TOKEN}`,
@@ -162,34 +165,90 @@ export default async function handler(req, res) {
       body: buf,
     });
 
-    const text = await hfResp.text();
-    // BLIP returns JSON like: [ { "generated_text": "a red car on a road" } ]
-    let caption = "";
+    const text = await r.text();
+    lastText = text;
+
     try {
       const parsed = JSON.parse(text);
+
+      // Loading / cold start
+      if (parsed?.error && /loading/i.test(parsed.error)) {
+        await new Promise((res) => setTimeout(res, 1200 + i * 600));
+        continue;
+      }
+
+      // Standard BLIP array form: [{ generated_text: "..." }]
       if (Array.isArray(parsed) && parsed[0]?.generated_text) {
-        caption = String(parsed[0].generated_text);
-      } else if (parsed?.error) {
-        // Model may still be loading on free tier; HF returns { error: "...loading..." }
-        return res.status(503).json({ ok: false, error: parsed.error });
+        return String(parsed[0].generated_text);
+      }
+
+      // Other error form
+      if (parsed?.error) {
+        throw Object.assign(new Error(parsed.error), { status: 502 });
       }
     } catch {
-      // Sometimes HF proxies return plain text — treat it as caption fallback
-      caption = text?.slice(0, 280) || "";
+      // If not JSON, treat plain text as a best-effort caption
+      if (text && text.length > 0) return String(text).slice(0, 280);
     }
 
-    if (!caption) {
-      return res.status(502).json({ ok: false, error: "Empty caption from Hugging Face" });
+    // If we got here without returning, pause then retry
+    await new Promise((res) => setTimeout(res, 800));
+  }
+
+  throw Object.assign(new Error("Empty caption from Hugging Face"), { status: 502, debug: lastText?.slice(0, 120) });
+}
+
+/* ------------------ handler ------------------ */
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, error: "Method not allowed" });
+  }
+
+  try {
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
+    const { imageDataUrl, imageBase64, contentType, meta } = body;
+
+    if (!process.env.HF_TOKEN) {
+      return res.status(500).json({ ok: false, error: "Missing HF_TOKEN environment variable" });
     }
 
-    const composed = buildAlt({ caption, meta });
+    // Prefer full data URL
+    let buf = null;
+    if (imageDataUrl) {
+      buf = decodeDataUrl(imageDataUrl);
+      if (!buf) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid or missing image data URL",
+          hint: "Ensure client sends a data:image/...;base64,<payload> string (not blob: URL).",
+          sample: String(imageDataUrl).slice(0, 40),
+        });
+      }
+    } else if (imageBase64) {
+      // Fallback: raw base64 + contentType
+      if (!contentType || !/^image\//i.test(contentType)) {
+        return res.status(400).json({ ok: false, error: "contentType must be set when using imageBase64 (e.g., image/jpeg)" });
+      }
+      const b = decodeBase64Only(imageBase64);
+      if (!b) {
+        return res.status(400).json({ ok: false, error: "imageBase64 is not valid base64" });
+      }
+      buf = b;
+    } else {
+      return res.status(400).json({ ok: false, error: "Provide imageDataUrl or imageBase64" });
+    }
+
+    // Call HF (with small retry)
+    const caption = await hfCaptionWithRetry(buf, 3);
+
+    const composed = composeAlt({ caption, meta });
 
     return res.status(200).json({
       ok: true,
       alt: composed.alt,
       meta: {
         ...composed,
-        // Echo normalized vehicle fields for debugging
         vehicle: {
           year: meta?.year || "",
           make: normalizeMake(meta?.make || ""),
@@ -200,11 +259,9 @@ export default async function handler(req, res) {
       },
     });
   } catch (err) {
-    // Handle rate limits & common HF errors more clearly
     const status = err?.status || err?.response?.status || 500;
-    const message =
-      err?.message || err?.response?.data?.error || "Server error in /api/alt (HF)";
-    console.error("HF_API_ERROR", status, message);
+    const message = err?.message || "Server error in /api/alt";
+    console.error("ALT_API_ERROR", status, message);
     return res.status(status).json({ ok: false, error: message });
   }
 }
