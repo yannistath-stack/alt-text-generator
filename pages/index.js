@@ -28,29 +28,30 @@ export default function AltTextGenerator() {
   const [processing, setProcessing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
-  // ---- Local AI model (free, in-browser) ----
+  // ---- Free, local model ----
   const modelRef = useRef(null);
   const ensureModel = async () => {
     if (!modelRef.current) {
-      modelRef.current = await mobilenet.load(); // small + fast
-      // warm up
-      await tf.nextFrame();
-      // eslint-disable-next-line no-console
+      modelRef.current = await mobilenet.load(); // small, fast
+      await tf.nextFrame(); // warm-up tick
       console.log('✅ MobileNet loaded');
     }
     return modelRef.current;
   };
 
+  // ---- Helpers: naming & subject ----
   const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
 
-  // ---- Helpers ----
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
+
+  // Uppercase known Acura models even if Make is empty (team workflow)
   const modelName = (m, make) => {
     if (!m) return '';
     const up = m.toUpperCase();
-    if (make && make.toLowerCase() === 'acura' && ACURA_UPPERCASE_MODELS.includes(up)) return up;
+    if (ACURA_UPPERCASE_MODELS.includes(up)) return up;
     return cap(m);
   };
+
   const clamp = (s) => (s.length <= 125 ? s : s.slice(0, 125).trim());
 
   const subject = () => {
@@ -75,9 +76,24 @@ export default function AltTextGenerator() {
     return clamp(parts);
   };
 
-  // -----------------------------
-  // Perceptual hashing (aHash) for content de-dup
-  // -----------------------------
+  // ---- Filename canonicalization for dedupe ----
+  const canonicalName = (name) => {
+    const dot = name.lastIndexOf('.');
+    const base = dot >= 0 ? name.slice(0, dot) : name;
+    const ext = dot >= 0 ? name.slice(dot + 1) : '';
+    const cleaned = base
+      .replace(/[-_](s|m|l|xl|xxl|small|medium|large|xlarge)\b/gi, '')
+      .replace(/[-_]\d{2,4}x\d{2,4}\b/gi, '')
+      .replace(/@(\d+)x\b/gi, '')
+      .replace(/\b(\d{3,5}w)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .replace(/[-_]{2,}/g, '-')
+      .trim()
+      .toLowerCase();
+    return `${cleaned}.${ext.toLowerCase()}`;
+  };
+
+  // ---- Perceptual hash (aHash) for content dedupe ----
   const urlToImageElement = (url) =>
     new Promise((resolve, reject) => {
       const img = new Image();
@@ -113,59 +129,110 @@ export default function AltTextGenerator() {
     return d;
   };
 
-  // -----------------------------
-  // Free local AI: classify via MobileNet
-  // -----------------------------
+  // ---- Local model classify ----
   const classifyWithMobileNet = async (imgEl) => {
     const model = await ensureModel();
-    // MobileNet can take an HTMLImageElement directly
-    const preds = await model.classify(imgEl, 5); // top-5 labels
-    return preds.map(p => p.className.toLowerCase());
+    const preds = await model.classify(imgEl, 5); // [{className, probability}]
+    return preds.map(p => ({ label: p.className.toLowerCase(), prob: p.probability || 0 }));
   };
 
-  // -----------------------------
-  // Map labels → AIO AHM v2.5 canonical descriptor
-  // -----------------------------
-  const canonicalizeFromLabels = (labels) => {
-    const s = labels.join(' ');
-    // Interior parts
-    if (/\b(gearshift|gear stick|gear lever|shift knob|manual transmission|gear shifter)\b/.test(s)) return 'gear shifter detail';
-    if (/\bpaddle\b/.test(s)) return 'detail of paddle shifter';
-    if (/\b(steering wheel|steering)\b/.test(s)) return 'steering wheel detail';
-    if (/\b(instrument panel|dashboard|instrument cluster|gauge)\b/.test(s)) return 'instrument cluster detail';
-    if (/\b(screen|display|touchscreen|infotainment)\b/.test(s)) return 'infotainment screen detail';
-    if (/\b(center console)\b/.test(s)) return 'center console detail';
-    if (/\b(seat|upholstery)\b/.test(s) && /\bstitch\b/.test(s)) return 'seat stitching detail';
+  // ---- Quick interior detector (labels + simple pixel stats) ----
+  const looksInterior = (labelsArr, imgEl) => {
+    const s = labelsArr.map(l => l.label || l).join(' ').toLowerCase();
+    if (/\b(interior|dashboard|steering|gear|console|upholstery|seat|knob|speedometer|instrument)\b/.test(s)) return true;
 
-    // Exterior parts
-    if (/\b(headlight|head lamp)\b/.test(s)) return 'headlight detail';
-    if (/\b(taillight|rear light)\b/.test(s)) return 'taillight detail';
-    if (/\b(wheel|rim|tire)\b/.test(s)) return 'detail of wheel';
-    if (/\b(brake caliper|caliper)\b/.test(s)) return 'detail of brake caliper';
-    if (/\b(grille|emblem|badge)\b/.test(s)) return s.includes('badge') || s.includes('emblem') ? 'detail of badge' : 'detail of grille with emblem';
-    if (/\b(door handle)\b/.test(s)) return 'detail of door handle';
-    if (/\b(mirror)\b/.test(s)) return 'side mirror detail';
-    if (/\b(spoiler)\b/.test(s)) return 'detail of spoiler';
-    if (/\b(sunroof)\b/.test(s)) return 'detail of sunroof';
-    if (/\b(fog light)\b/.test(s)) return 'detail of fog light';
-    if (/\b(exhaust)\b/.test(s)) return 'detail of exhaust tip';
-    if (/\b(rear diffuser)\b/.test(s)) return 'detail of rear diffuser';
-
-    // Views — MobileNet won’t give view; use generic safe default
-    return null; // let the fallback choose a simple view below
+    // tiny visual cue (dark, low saturation)
+    const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    const ctx = c.getContext('2d'); ctx.drawImage(imgEl, 0, 0, 64, 64);
+    const { data } = ctx.getImageData(0, 0, 64, 64);
+    let dark = 0, satSum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i+1], b = data[i+2];
+      const bri = (r+g+b)/3;
+      const max = Math.max(r,g,b), min = Math.min(r,g,b);
+      const sat = max === 0 ? 0 : (max-min)/max;
+      if (bri < 60) dark++;
+      satSum += sat;
+    }
+    const total = 64*64;
+    return (dark/total > 0.28) && (satSum/total < 0.28);
   };
 
-  // Simple view fallback if no part found
-  const simpleViewFallback = (imgEl) => {
-    // quick geometry heuristic: wide aspect → likely front view
-    const { naturalWidth: w, naturalHeight: h } = imgEl;
-    if (w > h * 1.15) return 'front three-quarter view';
-    return 'side profile';
+  // ---- Contextual resolver: labels + interior → canonical descriptor ----
+  const resolveDescriptor = (labelsWithProb, interior, imgEl) => {
+    // score buckets
+    const score = {
+      'gear shifter detail': 0,
+      'detail of paddle shifter': 0,
+      'steering wheel detail': 0,
+      'instrument cluster detail': 0,
+      'infotainment screen detail': 0,
+      'center console detail': 0,
+      'seat stitching detail': 0,
+      'detail of wheel': 0,
+      'detail of brake caliper': 0,
+      'headlight detail': 0,
+      'taillight detail': 0,
+      'detail of grille with emblem': 0,
+      'detail of badge': 0,
+      'detail of door handle': 0,
+      'side mirror detail': 0,
+      'detail of spoiler': 0,
+      'detail of sunroof': 0,
+      'detail of fog light': 0,
+      'detail of exhaust tip': 0,
+      'detail of rear diffuser': 0,
+    };
+
+    // helper to bump scores on keyword hits
+    const bump = (key, p, w = 1) => { score[key] += (p * w); };
+
+    labelsWithProb.forEach(({ label, prob }) => {
+      const s = label.toLowerCase();
+
+      // interior
+      if (/\b(gear\s?shift|gear\s?shifter|gear\s?stick|shift\s?knob|gear\s?lever|manual\s?transmission)\b/.test(s)) bump('gear shifter detail', prob, 3);
+      if (/\bpaddle\b/.test(s)) bump('detail of paddle shifter', prob, 2.5);
+      if (/\b(steering\s?wheel|steering)\b/.test(s)) bump('steering wheel detail', prob, 2.5);
+      if (/\b(instrument\s?(panel|cluster)|dashboard|gauge)\b/.test(s)) bump('instrument cluster detail', prob, 2.2);
+      if (/\b(touch\s?screen|touchscreen|screen|display|infotainment)\b/.test(s)) bump('infotainment screen detail', prob, 2.2);
+      if (/\b(center\s?console)\b/.test(s)) bump('center console detail', prob, 2.0);
+      if (/\b(seat|upholstery)\b/.test(s) && /\bstitch(ing)?\b/.test(s)) bump('seat stitching detail', prob, 2.0);
+
+      // exterior
+      if (/\b(head\s?light|headlight)\b/.test(s)) bump('headlight detail', prob, 2.2);
+      if (/\b(tail\s?light|taillight|rear\s?light)\b/.test(s)) bump('taillight detail', prob, 2.2);
+      if (/\b(wheel|rim|tire)\b/.test(s)) bump('detail of wheel', prob, 2.0);
+      if (/\b(brake\s?caliper|caliper)\b/.test(s)) bump('detail of brake caliper', prob, 2.2);
+      if (/\b(grille|grill)\b/.test(s)) bump('detail of grille with emblem', prob, 1.8);
+      if (/\b(emblem|badge)\b/.test(s)) bump('detail of badge', prob, 1.9);
+      if (/\b(door\s?handle)\b/.test(s)) bump('detail of door handle', prob, 1.8);
+      if (/\b(mirror)\b/.test(s)) bump('side mirror detail', prob, 1.4); // lower weight; may be shiny surfaces
+      if (/\b(spoiler)\b/.test(s)) bump('detail of spoiler', prob, 1.6);
+      if (/\b(sun\s?roof|sunroof)\b/.test(s)) bump('detail of sunroof', prob, 1.6);
+      if (/\b(fog\s?light)\b/.test(s)) bump('detail of fog light', prob, 1.6);
+      if (/\b(exhaust)\b/.test(s)) bump('detail of exhaust tip', prob, 1.6);
+      if (/\b(rear\s?diffuser)\b/.test(s)) bump('detail of rear diffuser', prob, 1.6);
+    });
+
+    // If interior, suppress exterior-only weak matches like "side mirror"
+    if (interior) score['side mirror detail'] *= 0.2;
+
+    // Choose the best-scoring descriptor if confident enough
+    let best = null, bestScore = 0;
+    Object.entries(score).forEach(([k, v]) => {
+      if (v > bestScore) { best = k; bestScore = v; }
+    });
+
+    // Confidence threshold: if nothing strong, pick a view fallback
+    if (!best || bestScore < 0.35) {
+      const { naturalWidth: w, naturalHeight: h } = imgEl;
+      return interior ? 'interior detail' : (w > h * 1.15 ? 'front three-quarter view' : 'side profile');
+    }
+    return best;
   };
 
-  // -----------------------------
-  // ZIP processing → dedupe → thumbnails → sequential AI
-  // -----------------------------
+  // ---- ZIP processing → HYBRID DEDUPE → thumbnails → sequential AI ----
   const processZipFile = async (file) => {
     setProcessing(true);
     try {
@@ -173,7 +240,7 @@ export default function AltTextGenerator() {
       const contents = await zip.loadAsync(file);
       const entries = Object.entries(contents.files).filter(([_, entry]) => !entry.dir);
 
-      const supported = ['jpg','jpeg','png','gif','webp','avif'];
+      const supported = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
       const imageEntries = entries.filter(([name]) => {
         const ext = name.split('.').pop().toLowerCase();
         return supported.includes(ext);
@@ -187,7 +254,7 @@ export default function AltTextGenerator() {
         all.push({ filename, blob, url, size: blob.size });
       }
 
-      // Compute perceptual hashes
+      // Perceptual hashes
       const withHashes = [];
       for (const it of all) {
         try {
@@ -199,27 +266,28 @@ export default function AltTextGenerator() {
         }
       }
 
-      // Group by similarity (hamming ≤ 6)
-      const groups = [];
+      // 1) Name-based pass: keep smallest per canonical name
+      const byName = new Map();
       for (const it of withHashes) {
+        const key = canonicalName(it.filename);
+        const prev = byName.get(key);
+        if (!prev || it.size < prev.size) byName.set(key, it);
+      }
+      const nameDeduped = Array.from(byName.values());
+
+      // 2) Visual pass: merge anything visually the same (tight threshold)
+      const groups = [];
+      for (const it of nameDeduped) {
         let placed = false;
         for (const g of groups) {
-          if (it.hash && g.rep) {
-            if (hamming(it.hash, g.rep) <= 6) {
-              g.items.push(it);
-              placed = true;
-              break;
-            }
-          } else if (!it.hash && !g.rep) {
-            g.items.push(it);
-            placed = true;
-            break;
+          if (it.hash && g.rep && hamming(it.hash, g.rep) <= 4) { // stricter than before
+            g.items.push(it); placed = true; break;
           }
         }
         if (!placed) groups.push({ rep: it.hash, items: [it] });
       }
 
-      // Choose one per group (smallest size)
+      // Choose one per visual group (smallest blob)
       const uniques = groups.map((g) => {
         const chosen = g.items.reduce((a, b) => (a.size <= b.size ? a : b));
         return {
@@ -237,38 +305,29 @@ export default function AltTextGenerator() {
       setImages(uniques);
       setShowResults(true);
 
-      // 2) Sequentially analyze and fill alt text
-      await ensureModel(); // load once
+      // 2) Sequential AI pass
+      await ensureModel();
       for (const item of uniques) {
-        // mark as processing
         setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, processing: true } : p)));
 
-        // Use the displayed image element
         const imgEl = await urlToImageElement(item.url);
 
-        // Get labels from MobileNet (free, local)
         let labels = [];
         try {
-          labels = await classifyWithMobileNet(imgEl);
+          labels = await classifyWithMobileNet(imgEl); // [{label, prob}]
         } catch {
           labels = [];
         }
 
-        // Map to canonical descriptor or fallback view
-        let descriptor = canonicalizeFromLabels(labels);
-        if (!descriptor) descriptor = simpleViewFallback(imgEl);
-
-        // Build final alt
+        const interior = looksInterior(labels, imgEl);
+        const descriptor = resolveDescriptor(labels, interior, imgEl);
         const alt = buildAlt(descriptor);
 
-        // update
         setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p)));
-        // tiny pause so progress feels smooth
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 120));
       }
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert('Error processing ZIP file. Please try again.');
     } finally {
@@ -301,6 +360,7 @@ export default function AltTextGenerator() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
+  // ---- PDF export ----
   const exportPDF = async () => {
     const doc = new jsPDF();
     let y = 20;
@@ -346,8 +406,7 @@ export default function AltTextGenerator() {
       setIsAuthenticated(true);
       sessionStorage.setItem('authenticated', 'true');
       setPasswordError('');
-      // Preload model after login
-      ensureModel();
+      ensureModel(); // preload model once logged in
     } else {
       setPasswordError('Incorrect password. Please try again.');
       setPasswordInput('');
@@ -359,7 +418,7 @@ export default function AltTextGenerator() {
     setPasswordInput('');
   };
 
-  // ---------------- RENDER (UI unchanged) ----------------
+  // ---------------- RENDER ----------------
   if (!isAuthenticated) {
     return (
       <div style={styles.loginContainer}>
@@ -542,7 +601,7 @@ export default function AltTextGenerator() {
   );
 }
 
-/* ---------- Styles (unchanged) ---------- */
+/* ---------- Styles ---------- */
 const styles = {
   loginContainer: { minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' },
   loginCard: { background: 'white', borderRadius: '16px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', padding: '3rem', maxWidth: '400px', width: '100%' },
