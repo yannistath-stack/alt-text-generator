@@ -105,32 +105,48 @@ export default function AltTextGenerator() {
   };
 
   // ==== FIX: Guaranteed Data URL builder ====
-  async function getImageDataUrl(item) {
-    if (typeof item?.url === 'string' && item.url.startsWith('data:image/')) {
-      return item.url;
-    }
-
-    let blob = null;
-
-    // Prefer the Blob we already stored from the ZIP
-    if (item?.blob instanceof Blob) {
-      blob = item.blob;
-    }
-
-    // If we only have a blob: URL, fetch it to a Blob
-    if (!blob && typeof item?.url === 'string' && item.url.startsWith('blob:')) {
-      blob = await fetch(item.url).then(r => r.blob());
-    }
-
-    if (!blob) throw new Error('No blob available for this image');
-
-    return await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onloadend = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(blob);
-    });
+ async function getImageDataUrl(item) {
+  if (typeof item?.url === 'string' && item.url.startsWith('data:image/')) {
+    return item.url; // already base64
   }
+
+  // Always prefer the Blob
+  let blob = null;
+
+  // Use existing Blob
+  if (item?.blob instanceof Blob) {
+    blob = item.blob;
+  }
+
+  // If no blob, try to fetch the blob: URL
+  if (!blob && typeof item?.url === 'string' && item.url.startsWith('blob:')) {
+    try {
+      const res = await fetch(item.url);
+      blob = await res.blob();
+    } catch (err) {
+      console.error('Blob fetch failed:', err);
+      throw new Error('Failed to fetch blob');
+    }
+  }
+
+  if (!blob) throw new Error('No blob found for image');
+
+  // Convert to base64 Data URL
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result === 'string' && result.startsWith('data:image/')) {
+        resolve(result);
+      } else {
+        reject(new Error('Failed to convert blob to Data URL'));
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 
   // ---- ZIP processing → hybrid dedupe → thumbnails → sequential AI ----
   const processZipFile = async (file) => {
