@@ -1,9 +1,13 @@
 // pages/index.js
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
-import * as tf from '@tensorflow/tfjs';
-import * as mobilenet from '@tensorflow-models/mobilenet';
+
+// === Front-end stays the same visually ===
+// Changes:
+// - Hybrid dedupe (filename + perceptual hash)
+// - Thumbnails first, then sequential calls to /api/alt
+// - Server returns canonical descriptor; we build final alt
 
 export default function AltTextGenerator() {
   // ---- Auth ----
@@ -12,7 +16,7 @@ export default function AltTextGenerator() {
   const [passwordError, setPasswordError] = useState('');
   const CORRECT_PASSWORD = 'AHM.2025';
 
-  // ---- Vehicle form (Make is optional) ----
+  // ---- Vehicle form ----
   const [vehicleInfo, setVehicleInfo] = useState({
     year: '',
     make: '',
@@ -28,30 +32,17 @@ export default function AltTextGenerator() {
   const [processing, setProcessing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
-  // ---- Free, local model ----
-  const modelRef = useRef(null);
-  const ensureModel = async () => {
-    if (!modelRef.current) {
-      modelRef.current = await mobilenet.load(); // small, fast
-      await tf.nextFrame(); // warm-up tick
-      console.log('✅ MobileNet loaded');
-    }
-    return modelRef.current;
-  };
-
-  // ---- Helpers: naming & subject ----
   const ACURA_UPPERCASE_MODELS = ['MDX','RDX','TLX','ILX','NSX','ZDX','ADX','RLX','TSX','RSX'];
 
+  // ---- Helpers ----
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
-
-  // Uppercase known Acura models even if Make is empty (team workflow)
+  // Uppercase known Acura models even if Make is empty
   const modelName = (m, make) => {
     if (!m) return '';
     const up = m.toUpperCase();
     if (ACURA_UPPERCASE_MODELS.includes(up)) return up;
     return cap(m);
   };
-
   const clamp = (s) => (s.length <= 125 ? s : s.slice(0, 125).trim());
 
   const subject = () => {
@@ -62,11 +53,7 @@ export default function AltTextGenerator() {
       modelName(model, make) || '',
       trim ? cap(trim) : '',
       color ? `in ${color}` : '',
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
+    ].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
     return parts;
   };
 
@@ -76,7 +63,7 @@ export default function AltTextGenerator() {
     return clamp(parts);
   };
 
-  // ---- Filename canonicalization for dedupe ----
+  // ---- Filename canonicalization (dedupe by responsive suffixes) ----
   const canonicalName = (name) => {
     const dot = name.lastIndexOf('.');
     const base = dot >= 0 ? name.slice(0, dot) : name;
@@ -93,7 +80,7 @@ export default function AltTextGenerator() {
     return `${cleaned}.${ext.toLowerCase()}`;
   };
 
-  // ---- Perceptual hash (aHash) for content dedupe ----
+  // ---- aHash (perceptual) for content dedupe ----
   const urlToImageElement = (url) =>
     new Promise((resolve, reject) => {
       const img = new Image();
@@ -105,134 +92,48 @@ export default function AltTextGenerator() {
 
   const aHashFromImageElement = (imgEl) => {
     const size = 8;
-    const c = document.createElement('canvas');
-    c.width = size;
-    c.height = size;
+    const c = document.createElement('canvas'); c.width = size; c.height = size;
     const ctx = c.getContext('2d');
     ctx.drawImage(imgEl, 0, 0, size, size);
     const { data } = ctx.getImageData(0, 0, size, size);
 
     const gray = [];
     for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      const v = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-      gray.push(v);
+      const r = data[i], g = data[i+1], b = data[i+2];
+      gray.push(Math.round(0.299*r + 0.587*g + 0.114*b));
     }
-    const avg = gray.reduce((a, b) => a + b, 0) / gray.length;
+    const avg = gray.reduce((a,b)=>a+b,0) / gray.length;
     return gray.map(v => (v >= avg ? '1' : '0')).join('');
   };
 
   const hamming = (a, b) => {
     if (!a || !b || a.length !== b.length) return 64;
-    let d = 0;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+    let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
     return d;
   };
 
-  // ---- Local model classify ----
-  const classifyWithMobileNet = async (imgEl) => {
-    const model = await ensureModel();
-    const preds = await model.classify(imgEl, 5); // [{className, probability}]
-    return preds.map(p => ({ label: p.className.toLowerCase(), prob: p.probability || 0 }));
-  };
-
-  // ---- Quick interior detector (labels + simple pixel stats) ----
-  const looksInterior = (labelsArr, imgEl) => {
-    const s = labelsArr.map(l => l.label || l).join(' ').toLowerCase();
-    if (/\b(interior|dashboard|steering|gear|console|upholstery|seat|knob|speedometer|instrument)\b/.test(s)) return true;
-
-    // tiny visual cue (dark, low saturation)
-    const c = document.createElement('canvas'); c.width = 64; c.height = 64;
-    const ctx = c.getContext('2d'); ctx.drawImage(imgEl, 0, 0, 64, 64);
-    const { data } = ctx.getImageData(0, 0, 64, 64);
-    let dark = 0, satSum = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i+1], b = data[i+2];
-      const bri = (r+g+b)/3;
-      const max = Math.max(r,g,b), min = Math.min(r,g,b);
-      const sat = max === 0 ? 0 : (max-min)/max;
-      if (bri < 60) dark++;
-      satSum += sat;
+  // ---- Server call: ask proper Vision AI for descriptor ----
+  const fetchCanonicalDescriptor = async (dataUrl, meta) => {
+    try {
+      const base64 = dataUrl.split(',')[1];
+      const res = await fetch('/api/alt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64, meta }),
+      });
+      if (!res.ok) {
+        console.warn('Alt API error', await res.text());
+        return null;
+      }
+      const json = await res.json();
+      return json?.descriptor || null;
+    } catch (e) {
+      console.warn('fetch /api/alt failed', e);
+      return null;
     }
-    const total = 64*64;
-    return (dark/total > 0.28) && (satSum/total < 0.28);
   };
 
-  // ---- Contextual resolver: labels + interior → canonical descriptor ----
-  const resolveDescriptor = (labelsWithProb, interior, imgEl) => {
-    // score buckets
-    const score = {
-      'gear shifter detail': 0,
-      'detail of paddle shifter': 0,
-      'steering wheel detail': 0,
-      'instrument cluster detail': 0,
-      'infotainment screen detail': 0,
-      'center console detail': 0,
-      'seat stitching detail': 0,
-      'detail of wheel': 0,
-      'detail of brake caliper': 0,
-      'headlight detail': 0,
-      'taillight detail': 0,
-      'detail of grille with emblem': 0,
-      'detail of badge': 0,
-      'detail of door handle': 0,
-      'side mirror detail': 0,
-      'detail of spoiler': 0,
-      'detail of sunroof': 0,
-      'detail of fog light': 0,
-      'detail of exhaust tip': 0,
-      'detail of rear diffuser': 0,
-    };
-
-    // helper to bump scores on keyword hits
-    const bump = (key, p, w = 1) => { score[key] += (p * w); };
-
-    labelsWithProb.forEach(({ label, prob }) => {
-      const s = label.toLowerCase();
-
-      // interior
-      if (/\b(gear\s?shift|gear\s?shifter|gear\s?stick|shift\s?knob|gear\s?lever|manual\s?transmission)\b/.test(s)) bump('gear shifter detail', prob, 3);
-      if (/\bpaddle\b/.test(s)) bump('detail of paddle shifter', prob, 2.5);
-      if (/\b(steering\s?wheel|steering)\b/.test(s)) bump('steering wheel detail', prob, 2.5);
-      if (/\b(instrument\s?(panel|cluster)|dashboard|gauge)\b/.test(s)) bump('instrument cluster detail', prob, 2.2);
-      if (/\b(touch\s?screen|touchscreen|screen|display|infotainment)\b/.test(s)) bump('infotainment screen detail', prob, 2.2);
-      if (/\b(center\s?console)\b/.test(s)) bump('center console detail', prob, 2.0);
-      if (/\b(seat|upholstery)\b/.test(s) && /\bstitch(ing)?\b/.test(s)) bump('seat stitching detail', prob, 2.0);
-
-      // exterior
-      if (/\b(head\s?light|headlight)\b/.test(s)) bump('headlight detail', prob, 2.2);
-      if (/\b(tail\s?light|taillight|rear\s?light)\b/.test(s)) bump('taillight detail', prob, 2.2);
-      if (/\b(wheel|rim|tire)\b/.test(s)) bump('detail of wheel', prob, 2.0);
-      if (/\b(brake\s?caliper|caliper)\b/.test(s)) bump('detail of brake caliper', prob, 2.2);
-      if (/\b(grille|grill)\b/.test(s)) bump('detail of grille with emblem', prob, 1.8);
-      if (/\b(emblem|badge)\b/.test(s)) bump('detail of badge', prob, 1.9);
-      if (/\b(door\s?handle)\b/.test(s)) bump('detail of door handle', prob, 1.8);
-      if (/\b(mirror)\b/.test(s)) bump('side mirror detail', prob, 1.4); // lower weight; may be shiny surfaces
-      if (/\b(spoiler)\b/.test(s)) bump('detail of spoiler', prob, 1.6);
-      if (/\b(sun\s?roof|sunroof)\b/.test(s)) bump('detail of sunroof', prob, 1.6);
-      if (/\b(fog\s?light)\b/.test(s)) bump('detail of fog light', prob, 1.6);
-      if (/\b(exhaust)\b/.test(s)) bump('detail of exhaust tip', prob, 1.6);
-      if (/\b(rear\s?diffuser)\b/.test(s)) bump('detail of rear diffuser', prob, 1.6);
-    });
-
-    // If interior, suppress exterior-only weak matches like "side mirror"
-    if (interior) score['side mirror detail'] *= 0.2;
-
-    // Choose the best-scoring descriptor if confident enough
-    let best = null, bestScore = 0;
-    Object.entries(score).forEach(([k, v]) => {
-      if (v > bestScore) { best = k; bestScore = v; }
-    });
-
-    // Confidence threshold: if nothing strong, pick a view fallback
-    if (!best || bestScore < 0.35) {
-      const { naturalWidth: w, naturalHeight: h } = imgEl;
-      return interior ? 'interior detail' : (w > h * 1.15 ? 'front three-quarter view' : 'side profile');
-    }
-    return best;
-  };
-
-  // ---- ZIP processing → HYBRID DEDUPE → thumbnails → sequential AI ----
+  // ---- ZIP processing → hybrid dedupe → thumbnails → sequential AI ----
   const processZipFile = async (file) => {
     setProcessing(true);
     try {
@@ -240,13 +141,10 @@ export default function AltTextGenerator() {
       const contents = await zip.loadAsync(file);
       const entries = Object.entries(contents.files).filter(([_, entry]) => !entry.dir);
 
-      const supported = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
-      const imageEntries = entries.filter(([name]) => {
-        const ext = name.split('.').pop().toLowerCase();
-        return supported.includes(ext);
-      });
+      const supported = ['jpg','jpeg','png','gif','webp','avif'];
+      const imageEntries = entries.filter(([name]) => supported.includes(name.split('.').pop().toLowerCase()));
 
-      // Load blobs + temp URLs
+      // blobs + urls
       const all = [];
       for (const [filename, entry] of imageEntries) {
         const blob = await entry.async('blob');
@@ -254,7 +152,7 @@ export default function AltTextGenerator() {
         all.push({ filename, blob, url, size: blob.size });
       }
 
-      // Perceptual hashes
+      // hashes
       const withHashes = [];
       for (const it of all) {
         try {
@@ -266,7 +164,7 @@ export default function AltTextGenerator() {
         }
       }
 
-      // 1) Name-based pass: keep smallest per canonical name
+      // Pass 1: by canonical filename (keep smallest)
       const byName = new Map();
       for (const it of withHashes) {
         const key = canonicalName(it.filename);
@@ -275,19 +173,19 @@ export default function AltTextGenerator() {
       }
       const nameDeduped = Array.from(byName.values());
 
-      // 2) Visual pass: merge anything visually the same (tight threshold)
+      // Pass 2: by visual content (strict)
       const groups = [];
       for (const it of nameDeduped) {
         let placed = false;
         for (const g of groups) {
-          if (it.hash && g.rep && hamming(it.hash, g.rep) <= 4) { // stricter than before
+          if (it.hash && g.rep && hamming(it.hash, g.rep) <= 4) {
             g.items.push(it); placed = true; break;
           }
         }
         if (!placed) groups.push({ rep: it.hash, items: [it] });
       }
 
-      // Choose one per visual group (smallest blob)
+      // choose one per group (smallest)
       const uniques = groups.map((g) => {
         const chosen = g.items.reduce((a, b) => (a.size <= b.size ? a : b));
         return {
@@ -301,31 +199,33 @@ export default function AltTextGenerator() {
         };
       });
 
-      // 1) Show thumbnails (no alt yet)
+      // 1) show thumbnails
       setImages(uniques);
       setShowResults(true);
 
-      // 2) Sequential AI pass
-      await ensureModel();
+      // 2) sequential AI
       for (const item of uniques) {
-        setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, processing: true } : p)));
+        setImages((prev) => prev.map(p => p.id === item.id ? { ...p, processing: true } : p));
 
-        const imgEl = await urlToImageElement(item.url);
+        const dataUrl = await new Promise((res) => {
+          const r = new FileReader();
+          r.onloadend = () => res(r.result);
+          r.readAsDataURL(item.blob);
+        });
 
-        let labels = [];
-        try {
-          labels = await classifyWithMobileNet(imgEl); // [{label, prob}]
-        } catch {
-          labels = [];
-        }
+        const meta = {
+          year: vehicleInfo.year,
+          make: vehicleInfo.make,
+          model: vehicleInfo.model,
+        };
 
-        const interior = looksInterior(labels, imgEl);
-        const descriptor = resolveDescriptor(labels, interior, imgEl);
+        let descriptor = await fetchCanonicalDescriptor(dataUrl, meta);
+        if (!descriptor) descriptor = 'front three-quarter view'; // safe fallback
+
         const alt = buildAlt(descriptor);
-
         setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p)));
         // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 100));
       }
     } catch (e) {
       console.error(e);
@@ -360,7 +260,7 @@ export default function AltTextGenerator() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
-  // ---- PDF export ----
+  // ---- PDF ----
   const exportPDF = async () => {
     const doc = new jsPDF();
     let y = 20;
@@ -406,7 +306,6 @@ export default function AltTextGenerator() {
       setIsAuthenticated(true);
       sessionStorage.setItem('authenticated', 'true');
       setPasswordError('');
-      ensureModel(); // preload model once logged in
     } else {
       setPasswordError('Incorrect password. Please try again.');
       setPasswordInput('');
@@ -418,7 +317,7 @@ export default function AltTextGenerator() {
     setPasswordInput('');
   };
 
-  // ---------------- RENDER ----------------
+  // ---- RENDER ----
   if (!isAuthenticated) {
     return (
       <div style={styles.loginContainer}>
