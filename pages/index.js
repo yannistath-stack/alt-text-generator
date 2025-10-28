@@ -579,12 +579,9 @@ const styles = {
   redButton: { background: '#dc2626', color: 'white' },
 
   imageList: { display: 'flex', flexDirection: 'column', gap: '1.5rem' },
-  imageCard: { display: 'flex', gap: '1.5rem', padding: '1.25rem', border: '1px solid '#e5e7eb', borderRadius: '8px' },
-  thumbnail: { width: '256px', height: '192px', objectFit: 'cover', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', flexShrink: 0 },
-  altTextContainer: { flex: 1 },
-  label: { display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' },
-  textBoxWrapper: { position: 'relative' },
-  altTextBox: { background: '#f9fafb', border: '1px solid '#e5e7eb', borderRadius: '8px', padding: '1rem 4rem 1rem 1rem', color: '#111827', userSelect: 'text', cursor: 'text', wordBreak: 'break-word' },
+imageCard: { display: 'flex', gap: '1.5rem', padding: '1.25rem', border: '1px solid #e5e7eb', borderRadius: '8px' },
+altTextBox: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem 4rem 1rem 1rem', color: '#111827', userSelect: 'text', cursor: 'text', wordBreak: 'break-word' },
+
   copyButton: { position: 'absolute', right: '0.5rem', top: '0.5rem', padding: '0.5rem', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.25rem' },
   charCount: { fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' },
 };
