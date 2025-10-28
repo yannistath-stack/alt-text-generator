@@ -210,9 +210,20 @@ export default function AltTextGenerator() {
           model: vehicleInfo.model,
         };
 
-        const { descriptor, environment } = await fetchCanonicalDescriptor(dataUrl, meta);
-        const finalDescriptor = descriptor || 'front view';
-        const alt = buildAlt(finalDescriptor, environment);
+        // Call your new Hugging Face alt generator
+const resp = await fetch("/api/alt", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ imageDataUrl: dataUrl, meta }),
+});
+
+const data = await resp.json().catch(() => null);
+
+let alt = "Analysis failed";
+if (resp.ok && data && data.ok && data.alt) {
+  alt = data.alt;
+}
+
 
         setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p)));
         // eslint-disable-next-line no-await-in-loop
