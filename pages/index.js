@@ -56,18 +56,18 @@ export default function AltTextGenerator() {
     return clamp(out.replace(/\s{2,}/g, ' '));
   };
 
-  // ---- Convert an item (with Blob or blob: URL) to a data:image/... URL
+  // ---- Guaranteed data URL builder (single source of truth) ----
   async function getImageDataUrl(item) {
-    // Already a data URL?
-    if (item?.url && typeof item.url === 'string' && item.url.startsWith('data:image/')) {
+    // Already a data URL
+    if (typeof item?.url === 'string' && item.url.startsWith('data:image/')) {
       return item.url;
     }
 
-    // Prefer an existing Blob
+    // Prefer Blob if present
     let blob = item?.blob instanceof Blob ? item.blob : null;
 
-    // If no Blob, fetch the blob: URL
-    if (!blob && item?.url && typeof item.url === 'string' && item.url.startsWith('blob:')) {
+    // If no Blob but a blob: URL exists, fetch it to Blob
+    if (!blob && typeof item?.url === 'string' && item.url.startsWith('blob:')) {
       const resp = await fetch(item.url);
       if (!resp.ok) throw new Error(`Blob fetch failed with ${resp.status}`);
       blob = await resp.blob();
@@ -75,7 +75,7 @@ export default function AltTextGenerator() {
 
     if (!blob) throw new Error('No blob found for image');
 
-    // Blob -> data URL
+    // Convert Blob -> data URL
     const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result);
@@ -146,9 +146,7 @@ export default function AltTextGenerator() {
       const entries = Object.entries(contents.files).filter(([_, entry]) => !entry.dir);
 
       const supported = ['jpg','jpeg','png','gif','webp','avif'];
-      const imageEntries = entries.filter(([name]) =>
-        supported.includes(name.split('.').pop().toLowerCase())
-      );
+      const imageEntries = entries.filter(([name]) => supported.includes(name.split('.').pop().toLowerCase()));
 
       // blobs + urls
       const all = [];
@@ -185,9 +183,7 @@ export default function AltTextGenerator() {
         let placed = false;
         for (const g of groups) {
           if (it.hash && g.rep && hamming(it.hash, g.rep) <= 4) {
-            g.items.push(it);
-            placed = true;
-            break;
+            g.items.push(it); placed = true; break;
           }
         }
         if (!placed) groups.push({ rep: it.hash, items: [it] });
@@ -211,23 +207,17 @@ export default function AltTextGenerator() {
       setImages(uniques);
       setShowResults(true);
 
-      // ===== sequential AI =====
+      // sequential AI
       for (const item of uniques) {
-        setImages((prev) =>
-          prev.map((p) => (p.id === item.id ? { ...p, processing: true } : p))
-        );
+        setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, processing: true } : p)));
 
-        // Build a guaranteed data URL
+        // Build guaranteed data URL
         let dataUrl;
         try {
           dataUrl = await getImageDataUrl(item);
         } catch (e) {
           console.error('DATAURL_BUILD_ERROR', e);
-          setImages((prev) =>
-            prev.map((p) =>
-              p.id === item.id ? { ...p, alt: 'Could not read image', processing: false } : p
-            )
-          );
+          setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt: 'Could not read image', processing: false } : p)));
           // eslint-disable-next-line no-continue
           continue;
         }
@@ -240,24 +230,23 @@ export default function AltTextGenerator() {
           color: vehicleInfo.color,
         };
 
-        const resp = await fetch('/api/alt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageDataUrl: dataUrl, meta }),
-        });
-
-        const data = await resp.json().catch(() => null);
-
+        // Call your Hugging Face alt generator (proxied via /api/alt)
         let alt = 'Analysis failed';
-        if (resp.ok && data && data.ok && data.alt) {
-          alt = data.alt;
+        try {
+          const resp = await fetch('/api/alt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageDataUrl: dataUrl, meta }),
+          });
+          const data = await resp.json().catch(() => null);
+          if (resp.ok && data && data.ok && data.alt) {
+            alt = data.alt;
+          }
+        } catch (err) {
+          console.warn('Alt API error', err);
         }
 
-        setImages((prev) =>
-          prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p))
-        );
-
-        // small delay between calls
+        setImages((prev) => prev.map((p) => (p.id === item.id ? { ...p, alt, processing: false } : p)));
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 100));
       }
@@ -308,7 +297,7 @@ export default function AltTextGenerator() {
 
     for (const img of images) {
       if (y > 220) { doc.addPage(); y = 20; }
-      const dataUrl = await getImageDataUrl(img); // use same robust helper
+      const dataUrl = await getImageDataUrl(img); // use the same helper
       const isPng = img.filename.toLowerCase().endsWith('.png');
       doc.addImage(dataUrl, isPng ? 'PNG' : 'JPEG', 20, y, 60, 40);
       doc.setFontSize(10);
@@ -579,9 +568,12 @@ const styles = {
   redButton: { background: '#dc2626', color: 'white' },
 
   imageList: { display: 'flex', flexDirection: 'column', gap: '1.5rem' },
-imageCard: { display: 'flex', gap: '1.5rem', padding: '1.25rem', border: '1px solid #e5e7eb', borderRadius: '8px' },
-altTextBox: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem 4rem 1rem 1rem', color: '#111827', userSelect: 'text', cursor: 'text', wordBreak: 'break-word' },
-
+  imageCard: { display: 'flex', gap: '1.5rem', padding: '1.25rem', border: '1px solid #e5e7eb', borderRadius: '8px' },
+  thumbnail: { width: '256px', height: '192px', objectFit: 'cover', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', flexShrink: 0 },
+  altTextContainer: { flex: 1 },
+  label: { display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#6b7280', marginBottom: '0.5rem' },
+  textBoxWrapper: { position: 'relative' },
+  altTextBox: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem 4rem 1rem 1rem', color: '#111827', userSelect: 'text', cursor: 'text', wordBreak: 'break-word' },
   copyButton: { position: 'absolute', right: '0.5rem', top: '0.5rem', padding: '0.5rem', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.25rem' },
   charCount: { fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' },
 };
