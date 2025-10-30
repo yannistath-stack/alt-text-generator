@@ -149,12 +149,30 @@ export default function AltTextGenerator() {
       const imageEntries = entries.filter(([name]) => supported.includes(name.split('.').pop().toLowerCase()));
 
       // blobs + urls
-      const all = [];
-      for (const [filename, entry] of imageEntries) {
-        const blob = await entry.async('blob');
-        const url = URL.createObjectURL(blob);
-        all.push({ filename, blob, url, size: blob.size });
-      }
+     const all = [];
+for (const [filename, entry] of imageEntries) {
+const rawBlob = await entry.async('blob');
+
+// Determine MIME type from filename extension
+const ext = filename.split('.').pop().toLowerCase();
+const mimeMap = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+};
+const mimeType = mimeMap[ext] || 'image/jpeg';
+
+// Create a new Blob with explicit MIME type
+const blob = new Blob([rawBlob], { type: mimeType });
+const url = URL.createObjectURL(blob);
+
+console.log(`✅ Created blob for ${filename}: ${mimeType}, size: ${blob.size}`);
+
+all.push({ filename, blob, url, size: blob.size });
+}
 
       // hashes
       const withHashes = [];
